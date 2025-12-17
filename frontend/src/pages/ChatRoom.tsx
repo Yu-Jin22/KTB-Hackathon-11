@@ -1,7 +1,8 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 interface Message {
+  id: string;
   role: 'user' | 'assistant';
   content: string;
   stepNumber?: number;
@@ -49,11 +50,11 @@ export default function ChatRoom() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const PAGE_SIZE = 5;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const messagesBoxRef = useRef<HTMLDivElement>(null);
+  const restoreScrollRef = useRef<{ prevHeight: number } | null>(null);
 
-  // 스크롤 자동 이동
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
 
   // 세션 시작
   useEffect(() => {
@@ -61,6 +62,39 @@ export default function ChatRoom() {
       startSession();
     }
   }, [recipe]);
+
+  const isNearBottomRef = useRef(true);
+
+  useEffect(() => {
+    const el = messagesBoxRef.current;
+    if (!el) return;
+
+    const onScroll = () => {
+      const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
+      isNearBottomRef.current = distance < 80;
+    };
+
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (isNearBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages]);
+
+  useLayoutEffect(() => {
+    const el = messagesBoxRef.current;
+    const ctx = restoreScrollRef.current;
+    if (!el || !ctx) return;
+
+    const nextHeight = el.scrollHeight;
+    el.scrollTop = nextHeight - ctx.prevHeight + el.scrollTop;
+
+    restoreScrollRef.current = null;
+  }, [visibleCount]);
+
 
   const startSession = async () => {
     if (!recipe) return;
@@ -76,6 +110,7 @@ export default function ChatRoom() {
 
       // 환영 메시지
       setMessages([{
+        id: makeId(),
         role: 'assistant',
         content: `안녕! 오늘 **${recipe.title}** 만들어볼 거야 🍳\n\n총 ${recipe.steps.length}단계로 진행할게. 준비되면 **Step 1**부터 시작하자!\n\n궁금한 거 있으면 언제든 물어봐. 사진 찍어서 보여주면 피드백도 해줄게! 📸`
       }]);
@@ -112,6 +147,7 @@ export default function ChatRoom() {
     if (!sessionId) return;
 
     const userMessage: Message = {
+      id: makeId(),
       role: 'user',
       content: inputText,
       stepNumber: currentStep,
@@ -149,6 +185,7 @@ export default function ChatRoom() {
       const data = await response.json();
 
       setMessages(prev => [...prev, {
+        id: makeId(),
         role: 'assistant',
         content: data.reply,
         stepNumber: currentStep
@@ -162,6 +199,7 @@ export default function ChatRoom() {
     } catch (error) {
       console.error('메시지 전송 실패:', error);
       setMessages(prev => [...prev, {
+        id: makeId(),
         role: 'assistant',
         content: '앗, 오류가 발생했어. 다시 시도해줄래?'
       }]);
@@ -186,6 +224,7 @@ export default function ChatRoom() {
       if (data.is_finished) {
         setCookingStatus('finished');
         setMessages(prev => [...prev, {
+          id: makeId(),
           role: 'assistant',
           content: `🎉 **축하해! ${recipe?.title} 완성!**\n\n정말 잘했어! 맛있게 먹어 🍽️\n\n오늘 요리 어땠어?`
         }]);
@@ -193,6 +232,7 @@ export default function ChatRoom() {
         setCurrentStep(data.next_step);
         const nextStepInfo = recipe?.steps[data.next_step - 1];
         setMessages(prev => [...prev, {
+          id: makeId(),
           role: 'assistant',
           content: `✅ **Step ${currentStep} 완료!**\n\n다음은 **Step ${data.next_step}**이야:\n> ${nextStepInfo?.instruction}\n\n${nextStepInfo?.tips ? `💡 팁: ${nextStepInfo.tips}` : ''}\n\n준비되면 시작해!`
         }]);
@@ -207,6 +247,7 @@ export default function ChatRoom() {
     setCurrentStep(stepNum);
     const stepInfo = recipe?.steps[stepNum - 1];
     setMessages(prev => [...prev, {
+      id: makeId(),
       role: 'assistant',
       content: `📍 **Step ${stepNum}**로 이동했어!\n\n> ${stepInfo?.instruction}\n\n${stepInfo?.tips ? `💡 팁: ${stepInfo.tips}` : ''}\n\n질문 있으면 말해줘!`
     }]);
@@ -239,6 +280,24 @@ export default function ChatRoom() {
   const progress = recipe.steps.length > 0
     ? Math.round((completedSteps.length / recipe.steps.length) * 100)
     : 0;
+
+  const visibleMessages = messages.slice(Math.max(0, messages.length - visibleCount));
+
+  const handleScroll = () => {
+    const el = messagesBoxRef.current;
+    if (!el) return;
+
+    // 맨 위에 가까워지면 과거 메시지 더 보여줌
+    if (el.scrollTop < 30) {
+      restoreScrollRef.current = { prevHeight: el.scrollHeight };
+      setVisibleCount((v) => Math.min(messages.length, v + PAGE_SIZE));
+    }
+  };
+
+  const makeId = () =>
+    (typeof crypto !== "undefined" && "randomUUID" in crypto)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -295,22 +354,20 @@ export default function ChatRoom() {
                   <button
                     key={stepNum}
                     onClick={() => selectStep(stepNum)}
-                    className={`w-full text-left p-3 rounded-xl mb-2 transition-all ${
-                      isCurrent
-                        ? 'gradient-bg-soft border-2 border-[rgba(69,197,138,.5)]'
-                        : isCompleted
+                    className={`w-full text-left p-3 rounded-xl mb-2 transition-all ${isCurrent
+                      ? 'gradient-bg-soft border-2 border-[rgba(69,197,138,.5)]'
+                      : isCompleted
                         ? 'bg-green-50 border border-green-200'
                         : 'bg-gray-50 hover:bg-gray-100 border border-transparent'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center gap-2 mb-1">
-                      <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold ${
-                        isCompleted
-                          ? 'bg-green-500 text-white'
-                          : isCurrent
+                      <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold ${isCompleted
+                        ? 'bg-green-500 text-white'
+                        : isCurrent
                           ? 'gradient-bg'
                           : 'bg-gray-300'
-                      }`}>
+                        }`}>
                         {isCompleted ? '✓' : stepNum}
                       </span>
                       <span className="font-bold text-sm">Step {stepNum}</span>
@@ -341,49 +398,52 @@ export default function ChatRoom() {
         {/* Chat Area */}
         <main className="flex-1 flex flex-col bg-gray-50">
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.map((msg, idx) => (
-              <div
-                key={idx}
-                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
+          <div ref={messagesBoxRef}
+            onScroll={handleScroll}
+            className="flex-1 overflow-y-auto p-4">
+            <div className='min-h-full flex flex-col justify-end space-y-4'>
+              {visibleMessages.map((msg, idx) => (
                 <div
-                  className={`max-w-[80%] rounded-2xl p-4 ${
-                    msg.role === 'user'
+                  key={idx}
+                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[80%] rounded-2xl p-4 ${msg.role === 'user'
                       ? 'bg-[var(--g-200)] rounded-br-sm'
                       : 'bg-white border border-[var(--line)] rounded-bl-sm'
-                  }`}
-                >
-                  {msg.stepNumber && (
-                    <span className="text-xs text-[var(--muted)] mb-1 block">
-                      Step {msg.stepNumber}
-                    </span>
-                  )}
-                  {msg.imageUrl && (
-                    <img
-                      src={msg.imageUrl}
-                      alt="uploaded"
-                      className="max-w-full rounded-lg mb-2 max-h-48 object-cover"
-                    />
-                  )}
-                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                </div>
-              </div>
-            ))}
-
-            {isLoading && (
-              <div className="flex justify-start">
-                <div className="bg-white border border-[var(--line)] rounded-2xl rounded-bl-sm p-4">
-                  <div className="flex gap-1">
-                    <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-                    <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
-                    <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                      }`}
+                  >
+                    {msg.stepNumber && (
+                      <span className="text-xs text-[var(--muted)] mb-1 block">
+                        Step {msg.stepNumber}
+                      </span>
+                    )}
+                    {msg.imageUrl && (
+                      <img
+                        src={msg.imageUrl}
+                        alt="uploaded"
+                        className="max-w-full rounded-lg mb-2 max-h-48 object-cover"
+                      />
+                    )}
+                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
                   </div>
                 </div>
-              </div>
-            )}
+              ))}
 
-            <div ref={messagesEndRef} />
+              {isLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-white border border-[var(--line)] rounded-2xl rounded-bl-sm p-4">
+                    <div className="flex gap-1">
+                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
+                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
+                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </div>
           </div>
 
           {/* Image Preview */}
