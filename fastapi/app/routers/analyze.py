@@ -450,7 +450,7 @@ async def process_dummy(job_id: str) -> None:
         job_id,
         status="processing",
         step="dummy",
-        message="더미 처리 중...",
+        message="레시피 영상을 확인하고 있어요!",
         progress=10
     )
 
@@ -459,7 +459,7 @@ async def process_dummy(job_id: str) -> None:
         status="processing",
         progress=10,
         step="dummy",
-        message="⏳ 더미 처리 중..."
+        message="⏳ 쇼츠를 단계별 레시피로 바꾸는 중이에요!"
     )
 
     await asyncio.sleep(5)
@@ -468,7 +468,7 @@ async def process_dummy(job_id: str) -> None:
         job_id,
         status="completed",
         step="done",
-        message="더미 완료!",
+        message="레시피 추출 완료! 이제 단계별로 요리를 시작해볼까요?",
         progress=100,
         result=DUMMY_RESULT
     )
@@ -478,7 +478,7 @@ async def process_dummy(job_id: str) -> None:
         status="completed",
         progress=100,
         step="done",
-        message="🎉 더미 완료!"
+        message="🎉 레시피 추출 완료! 이제 단계별로 요리를 시작해볼까요?"
     )
 
 async def process_video(job_id: str, url: str) -> None:
