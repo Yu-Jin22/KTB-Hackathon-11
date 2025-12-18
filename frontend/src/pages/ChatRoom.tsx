@@ -53,73 +53,60 @@ export default function ChatRoom() {
     const [selectedImage, setSelectedImage] = useState<File | null>(null);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
-
-    // ✅ 반응형: 모바일에선 패널을 기본 닫힘(오버레이로 열기)
     const [showStepPanel, setShowStepPanel] = useState(false);
-
     const [cookingStatus, setCookingStatus] = useState<CookingStatus>('cooking');
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    // ✅ IME(한글) 조합 상태
+    const isComposingRef = useRef(false);
+
+    // ✅ 스크롤 제어
+    const isNearBottomRef = useRef(true);
+    const forceScrollRef = useRef(false);
+
+    // ✅ 페이지네이션(과거메시지)
     const PAGE_SIZE = 5;
     const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
     const messagesBoxRef = useRef<HTMLDivElement>(null);
     const restoreScrollRef = useRef<{ prevHeight: number } | null>(null);
-    const isNearBottomRef = useRef(true);
 
-    // ✅ 데스크탑/태블릿에서는 패널 고정(열려있게), 모바일에서는 닫힘 유지
-    useEffect(() => {
-        const mq = window.matchMedia('(min-width: 768px)'); // md
-        const sync = () => setShowStepPanel(mq.matches);
-        sync();
-        mq.addEventListener('change', sync);
-        return () => mq.removeEventListener('change', sync);
-    }, []);
+    // -------- helpers --------
+    const makeId = () =>
+        (typeof crypto !== "undefined" && "randomUUID" in crypto)
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-    // 세션 시작
+    const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+        const el = messagesBoxRef.current;
+        if (!el) return;
+
+        // DOM 반영 2프레임 보장
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                const top = Math.max(0, el.scrollHeight - el.clientHeight);
+                el.scrollTo({ top, behavior });
+            });
+        });
+    };
+
+    // -------- session start --------
     useEffect(() => {
         if (recipe && !sessionId) startSession();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [recipe]);
 
-    useEffect(() => {
-        const el = messagesBoxRef.current;
-        if (!el) return;
-
-        const onScroll = () => {
-            const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
-            isNearBottomRef.current = distance < 80;
-        };
-
-        el.addEventListener("scroll", onScroll);
-        return () => el.removeEventListener("scroll", onScroll);
-    }, []);
-
-    useEffect(() => {
-        if (isNearBottomRef.current) {
-            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-        }
-    }, [messages]);
-
-    useLayoutEffect(() => {
-        const el = messagesBoxRef.current;
-        const ctx = restoreScrollRef.current;
-        if (!el || !ctx) return;
-
-        const nextHeight = el.scrollHeight;
-        el.scrollTop = nextHeight - ctx.prevHeight + el.scrollTop;
-        restoreScrollRef.current = null;
-    }, [visibleCount]);
-
     const startSession = async () => {
         if (!recipe) return;
+
         try {
             const response = await fetch(`${API_BASE}/start`, {
                 method: 'POST',
                 headers: getAuthHeaders(),
                 body: JSON.stringify({ recipe })
             });
+
             const data = await response.json();
             setSessionId(data.session_id);
 
@@ -128,16 +115,110 @@ export default function ChatRoom() {
                 role: 'assistant',
                 content: `안녕! 오늘 **${recipe.title}** 만들어볼 거야 🍳\n\n총 ${recipe.steps.length}단계로 진행할게. 준비되면 **Step 1**부터 시작하자!\n\n궁금한 거 있으면 언제든 물어봐. 사진 찍어서 보여주면 피드백도 해줄게! 📸`
             }]);
+
+            // 첫 메시지는 아래로
+            forceScrollRef.current = true;
         } catch (error) {
             console.error('세션 시작 실패:', error);
         }
     };
 
+    // -------- scroll tracking --------
+    useEffect(() => {
+        const el = messagesBoxRef.current;
+        if (!el) return;
+
+        const onScroll = () => {
+            const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
+            isNearBottomRef.current = distance < 120;
+        };
+
+        el.addEventListener("scroll", onScroll, { passive: true });
+        return () => el.removeEventListener("scroll", onScroll);
+    }, []);
+
+    // 과거 메시지 로드 시 스크롤 유지
+    useLayoutEffect(() => {
+        const el = messagesBoxRef.current;
+        const ctx = restoreScrollRef.current;
+        if (!el || !ctx) return;
+
+        const nextHeight = el.scrollHeight;
+        el.scrollTop = nextHeight - ctx.prevHeight + el.scrollTop;
+
+        restoreScrollRef.current = null;
+    }, [visibleCount]);
+
+    // ✅ 스크롤은 여기서만!
+    useLayoutEffect(() => {
+        if (!messagesBoxRef.current) return;
+
+        if (forceScrollRef.current) {
+            scrollToBottom("smooth");
+            forceScrollRef.current = false;
+            return;
+        }
+
+        if (isNearBottomRef.current) {
+            scrollToBottom("smooth");
+        }
+    }, [messages.length]);
+
+    const handleScroll = () => {
+        const el = messagesBoxRef.current;
+        if (!el) return;
+
+        if (el.scrollTop < 30) {
+            restoreScrollRef.current = { prevHeight: el.scrollHeight };
+            setVisibleCount((v) => Math.min(messages.length, v + PAGE_SIZE));
+        }
+    };
+
+    // -------- panel behavior --------
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") setShowStepPanel(false);
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, []);
+
+    // (선택) 패널 열렸을 때 바디 스크롤 잠금(모바일)
+    useEffect(() => {
+        if (!showStepPanel) return;
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        return () => { document.body.style.overflow = prev; };
+    }, [showStepPanel]);
+
+    // -------- image upload --------
+    const uploadImageToS3 = async (file: File): Promise<string> => {
+        const presignedRes = await fetch(PRESIGNED_API_BASE, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fileName: file.name, contentType: file.type })
+        });
+
+        if (!presignedRes.ok) throw new Error("Presigned URL 발급 실패");
+
+        const { uploadUrl, fileUrl } = await presignedRes.json();
+
+        const uploadRes = await fetch(uploadUrl, {
+            method: "PUT",
+            headers: { "Content-Type": file.type },
+            body: file
+        });
+
+        if (!uploadRes.ok) throw new Error("S3 업로드 실패");
+
+        return fileUrl;
+    };
+
     const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
-        setSelectedImage(file);
 
+        setSelectedImage(file);
         const reader = new FileReader();
         reader.onloadend = () => setImagePreview(reader.result as string);
         reader.readAsDataURL(file);
@@ -149,6 +230,7 @@ export default function ChatRoom() {
         if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
+    // -------- actions --------
     const sendMessage = async () => {
         if (!inputText.trim() && !selectedImage) return;
         if (!sessionId) return;
@@ -161,16 +243,17 @@ export default function ChatRoom() {
             imageUrl: imagePreview || undefined
         };
 
+        // ✅ 사용자가 위에 있어도 "전송"하면 무조건 아래로
+        forceScrollRef.current = true;
+        isNearBottomRef.current = true;
+
         setMessages(prev => [...prev, userMessage]);
         setInputText('');
         setIsLoading(true);
 
         try {
-            let imageBase64: string | null = null;
-
-            if (selectedImage) {
-                imageUrl = await uploadImageToS3(selectedImage);
-            }
+            let imageUrl: string | null = null;
+            if (selectedImage) imageUrl = await uploadImageToS3(selectedImage);
 
             const response = await fetch(`${API_BASE}/message`, {
                 method: 'POST',
@@ -179,11 +262,15 @@ export default function ChatRoom() {
                     session_id: sessionId,
                     step_number: currentStep,
                     message: inputText || '이 사진 봐줘',
-                    image_url: imageUrl // ⭐ 핵심 변경
+                    image_url: imageUrl
                 })
             });
 
             const data = await response.json();
+
+            // ✅ 응답 와도 아래로
+            forceScrollRef.current = true;
+            isNearBottomRef.current = true;
 
             setMessages(prev => [...prev, {
                 id: makeId(),
@@ -197,6 +284,10 @@ export default function ChatRoom() {
             }
         } catch (error) {
             console.error('메시지 전송 실패:', error);
+
+            forceScrollRef.current = true;
+            isNearBottomRef.current = true;
+
             setMessages(prev => [...prev, {
                 id: makeId(),
                 role: 'assistant',
@@ -216,9 +307,12 @@ export default function ChatRoom() {
                 method: 'POST',
                 headers: getAuthHeaders(),
             });
-            const data = await response.json();
 
+            const data = await response.json();
             setCompletedSteps(prev => [...prev, currentStep]);
+
+            forceScrollRef.current = true;
+            isNearBottomRef.current = true;
 
             if (data.is_finished) {
                 setCookingStatus('finished');
@@ -243,26 +337,21 @@ export default function ChatRoom() {
 
     const selectStep = (stepNum: number) => {
         setCurrentStep(stepNum);
+        setShowStepPanel(false); // ✅ 모바일에서 선택하면 닫기
+
         const stepInfo = recipe?.steps[stepNum - 1];
+
+        forceScrollRef.current = true;
+        isNearBottomRef.current = true;
+
         setMessages(prev => [...prev, {
             id: makeId(),
             role: 'assistant',
             content: `📍 **Step ${stepNum}**로 이동했어!\n\n> ${stepInfo?.instruction}\n\n${stepInfo?.tips ? `💡 팁: ${stepInfo.tips}` : ''}\n\n질문 있으면 말해줘!`
         }]);
-
-        // ✅ 모바일에서는 단계 선택하면 패널 닫아주기(채팅 화면 확보)
-        if (window.matchMedia('(max-width: 767px)').matches) {
-            setShowStepPanel(false);
-        }
     };
 
-    const handleKeyPress = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
-        }
-    };
-
+    // -------- guards --------
     if (!recipe) {
         return (
             <div className="h-screen flex items-center justify-center">
@@ -285,63 +374,46 @@ export default function ChatRoom() {
 
     const visibleMessages = messages.slice(Math.max(0, messages.length - visibleCount));
 
-    const handleScroll = () => {
-        const el = messagesBoxRef.current;
-        if (!el) return;
-
-        if (el.scrollTop < 30) {
-            restoreScrollRef.current = { prevHeight: el.scrollHeight };
-            setVisibleCount((v) => Math.min(messages.length, v + PAGE_SIZE));
-        }
-    };
-
-    const makeId = () =>
-        (typeof crypto !== "undefined" && "randomUUID" in crypto)
-            ? crypto.randomUUID()
-            : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-    const isMobile = typeof window !== "undefined" && window.matchMedia('(max-width: 767px)').matches;
-
     return (
-        <div className="h-[100dvh] flex flex-col">
+        <div className="h-dvh flex flex-col bg-gray-50">
             {/* Header */}
             <header className="h-16 flex items-center justify-between px-3 sm:px-4 bg-white/80 backdrop-blur-sm border-b border-[var(--line)] sticky top-0 z-50">
                 <div className="flex items-center gap-2 sm:gap-3 min-w-0">
                     <button
                         onClick={() => navigate('/')}
                         className="p-2 hover:bg-gray-100 rounded-full shrink-0"
+                        aria-label="뒤로가기"
                     >
                         ←
                     </button>
 
                     <div className="min-w-0">
                         <h1 className="font-black text-[13px] sm:text-sm truncate">{recipe.title}</h1>
-                        <p className="text-[11px] sm:text-xs text-[var(--muted)] truncate">
+                        <p className="text-[11px] sm:text-xs text-[var(--muted)]">
                             Step {currentStep} / {recipe.steps.length} · {progress}% 완료
                         </p>
                     </div>
                 </div>
 
+                {/* 단계보기: 아이콘 + 배지 */}
                 <button
-                    onClick={() => setShowStepPanel(!showStepPanel)}
+                    onClick={() => setShowStepPanel((v) => !v)}
                     className="
-                            group
-                            relative
-                            w-10 h-10
-                            grid place-items-center
-                            rounded-full
-                            bg-white/90
-                            border border-[var(--line)]
-                            shadow-[var(--shadow2)]
-                            hover:bg-white
-                            hover:shadow-[var(--shadow)]
-                            transition
-                            shrink-0
-                          "
+            group relative
+            w-10 h-10
+            grid place-items-center
+            rounded-full
+            bg-white/90
+            border border-[var(--line)]
+            shadow-[var(--shadow2)]
+            hover:bg-white
+            hover:shadow-[var(--shadow)]
+            transition
+            shrink-0
+          "
                     aria-label={showStepPanel ? "단계 패널 닫기" : "단계 패널 열기"}
                     title={showStepPanel ? "단계 닫기" : "단계 보기"}
                 >
-                    {/* 아이콘(리스트) */}
                     <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                         <path d="M8 6h13" stroke="rgba(23,34,51,.78)" strokeWidth="1.7" strokeLinecap="round" />
                         <path d="M8 12h13" stroke="rgba(23,34,51,.78)" strokeWidth="1.7" strokeLinecap="round" />
@@ -351,143 +423,147 @@ export default function ChatRoom() {
                         <path d="M4 18h.01" stroke="rgba(23,34,51,.78)" strokeWidth="3.2" strokeLinecap="round" />
                     </svg>
 
-                    {/* 배지(progress%) */}
                     <span
                         className="
-                              absolute -right-1 -top-1
-                              min-w-[22px] h-[18px]
-                              px-1
-                              rounded-full
-                              text-[10px]
-                              font-black
-                              grid place-items-center
-                              border border-[var(--line)]
-                              bg-white
-                              text-[rgba(23,34,51,.86)]
-                              shadow-[var(--shadow2)]
-                            "
+              absolute -right-1 -top-1
+              min-w-[22px] h-[18px]
+              px-1
+              rounded-full
+              text-[10px]
+              font-black
+              grid place-items-center
+              border border-[var(--line)]
+              bg-white
+              text-[rgba(23,34,51,.86)]
+              shadow-[var(--shadow2)]
+            "
                     >
                         {progress}%
                     </span>
 
-                    {/* 열림 상태 표시(작은 점) */}
                     {showStepPanel && (
                         <span className="absolute -left-1 -bottom-1 w-3 h-3 rounded-full gradient-bg border border-[rgba(23,34,51,.08)]" />
                     )}
                 </button>
-
             </header>
 
             <div className="flex-1 flex overflow-hidden relative">
-                {/* ✅ Step Panel: md 이상은 고정, 모바일은 오버레이 */}
-                {showStepPanel && (
-                    <>
-                        {/* 모바일 오버레이 배경 */}
-                        <div
-                            className="md:hidden absolute inset-0 bg-black/30 z-40"
+                {/* ✅ Backdrop: 항상 렌더(애니메이션 위해) */}
+                <div
+                    onClick={() => setShowStepPanel(false)}
+                    className={`
+            fixed inset-0 z-40 lg:hidden bg-black/35
+            transition-opacity duration-300
+            ${showStepPanel ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}
+          `}
+                />
+
+                {/* ✅ Step Panel: 항상 렌더(애니메이션 위해) */}
+                <aside
+                    className={`
+            fixed lg:static
+            z-50 lg:z-auto
+            inset-y-0 left-0
+            w-[86vw] max-w-[340px] lg:w-72
+            bg-white
+            border-r border-[var(--line)]
+            overflow-y-auto
+            shadow-[0_20px_60px_rgba(0,0,0,.18)] lg:shadow-none
+            transform transition-transform duration-300 ease-out
+            ${showStepPanel ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
+          `}
+                >
+                    {/* Mobile Panel Header */}
+                    <div className="lg:hidden sticky top-0 z-10 bg-white border-b border-[var(--line)] px-4 py-3 flex items-center justify-between">
+                        <div className="font-black text-sm">단계</div>
+                        <button
                             onClick={() => setShowStepPanel(false)}
-                        />
-                        <aside
-                            className={`
-                                    z-50
-                                    bg-white
-                                    border-r border-[var(--line)]
-                                    overflow-y-auto
-                                    w-[82vw] max-w-[320px]
-                                    md:w-72
-                                    absolute md:static
-                                    inset-y-0 left-0
-                                    ${isMobile ? 'shadow-2xl' : ''}
-                                  `}
+                            className="w-9 h-9 grid place-items-center rounded-full hover:bg-gray-100"
+                            aria-label="닫기"
                         >
-                            {/* Progress */}
-                            <div className="p-4 border-b border-[var(--line)] sticky top-0 bg-white z-10">
-                                <div className="flex justify-between text-xs mb-2">
-                                    <span className="font-black">진행률</span>
-                                    <span className="font-black">{progress}%</span>
-                                </div>
-                                <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                                    <div
-                                        className="h-full gradient-bg transition-all"
-                                        style={{ width: `${progress}%` }}
-                                    />
-                                </div>
+                            ✕
+                        </button>
+                    </div>
 
-                                {/* 모바일에서 닫기 버튼 */}
+                    {/* Progress */}
+                    <div className="p-4 border-b border-[var(--line)]">
+                        <div className="flex justify-between text-xs mb-2">
+                            <span className="font-black">진행률</span>
+                            <span className="font-black">{progress}%</span>
+                        </div>
+                        <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                            <div className="h-full gradient-bg transition-all" style={{ width: `${progress}%` }} />
+                        </div>
+                    </div>
+
+                    {/* Steps */}
+                    <div className="p-2">
+                        {recipe.steps.map((step, idx) => {
+                            const stepNum = idx + 1;
+                            const isCompleted = completedSteps.includes(stepNum);
+                            const isCurrent = stepNum === currentStep;
+
+                            return (
                                 <button
-                                    onClick={() => setShowStepPanel(false)}
-                                    className="md:hidden mt-3 w-full py-2 rounded-xl bg-gray-100 font-black text-xs"
+                                    key={stepNum}
+                                    onClick={() => selectStep(stepNum)}
+                                    className={`w-full text-left p-3 rounded-xl mb-2 transition-all ${isCurrent
+                                        ? 'gradient-bg-soft border-2 border-[rgba(69,197,138,.5)]'
+                                        : isCompleted
+                                            ? 'bg-green-50 border border-green-200'
+                                            : 'bg-gray-50 hover:bg-gray-100 border border-transparent'
+                                        }`}
                                 >
-                                    닫기
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-black ${isCompleted
+                                            ? 'bg-green-500 text-white'
+                                            : isCurrent
+                                                ? 'gradient-bg'
+                                                : 'bg-gray-300'
+                                            }`}>
+                                            {isCompleted ? '✓' : stepNum}
+                                        </span>
+                                        <span className="font-black text-sm">Step {stepNum}</span>
+                                        {isCurrent && <span className="text-xs">👈 현재</span>}
+                                    </div>
+                                    <p className="text-xs text-[var(--muted)] line-clamp-2 ml-8">
+                                        {step.instruction}
+                                    </p>
                                 </button>
-                            </div>
+                            );
+                        })}
+                    </div>
 
-                            {/* Steps */}
-                            <div className="p-2">
-                                {recipe.steps.map((step, idx) => {
-                                    const stepNum = idx + 1;
-                                    const isCompleted = completedSteps.includes(stepNum);
-                                    const isCurrent = stepNum === currentStep;
-
-                                    return (
-                                        <button
-                                            key={stepNum}
-                                            onClick={() => selectStep(stepNum)}
-                                            className={`w-full text-left p-3 rounded-xl mb-2 transition-all ${isCurrent
-                                                ? 'gradient-bg-soft border-2 border-[rgba(69,197,138,.5)]'
-                                                : isCompleted
-                                                    ? 'bg-green-50 border border-green-200'
-                                                    : 'bg-gray-50 hover:bg-gray-100 border border-transparent'
-                                                }`}
-                                        >
-                                            <div className="flex items-center gap-2 mb-1">
-                                                <span
-                                                    className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-black ${isCompleted
-                                                        ? 'bg-green-500 text-white'
-                                                        : isCurrent
-                                                            ? 'gradient-bg'
-                                                            : 'bg-gray-300'
-                                                        }`}
-                                                >
-                                                    {isCompleted ? '✓' : stepNum}
-                                                </span>
-                                                <span className="font-black text-sm">Step {stepNum}</span>
-                                                {isCurrent && <span className="text-xs">👈 현재</span>}
-                                            </div>
-                                            <p className="text-xs text-[var(--muted)] line-clamp-2 ml-8 break-words">
-                                                {step.instruction}
-                                            </p>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-
-                            {/* Complete Step Button */}
-                            {!completedSteps.includes(currentStep) && cookingStatus !== 'finished' && (
-                                <div className="p-4 border-t border-[var(--line)] sticky bottom-0 bg-white">
-                                    <button
-                                        onClick={completeCurrentStep}
-                                        className="w-full py-3 gradient-bg rounded-xl font-black text-sm hover:opacity-90 transition"
-                                    >
-                                        ✅ Step {currentStep} 완료!
-                                    </button>
-                                </div>
-                            )}
-                        </aside>
-                    </>
-                )}
+                    {!completedSteps.includes(currentStep) && cookingStatus !== "finished" && (
+                        <div className="p-4 border-t border-[var(--line)] sticky bottom-0 bg-white">
+                            <button
+                                onClick={completeCurrentStep}
+                                className="w-full py-3 gradient-bg rounded-xl font-black text-sm hover:opacity-90 transition"
+                            >
+                                ✅ Step {currentStep} 완료!
+                            </button>
+                        </div>
+                    )}
+                </aside>
 
                 {/* Chat Area */}
-                <main className="flex-1 flex flex-col overflow-hidden bg-gray-50">
+                <main className="flex-1 flex flex-col overflow-hidden">
                     {/* Messages */}
                     <div
                         ref={messagesBoxRef}
-                        onScroll={handleScroll}
+                        onScroll={() => {
+                            handleScroll();
+                            // 스크롤 핸들러에서 near-bottom도 최신화되도록 (안전)
+                            const el = messagesBoxRef.current;
+                            if (el) {
+                                const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
+                                isNearBottomRef.current = distance < 120;
+                            }
+                        }}
                         className="flex-1 overflow-y-auto p-3 sm:p-4"
                     >
-                        <div className="flex flex-col gap-3 sm:gap-4">
-                            <div className="flex-1" />
-
+                        {/* ✅ 아래부터 쌓이도록 */}
+                        <div className="flex flex-col gap-3 sm:gap-4 min-h-full justify-end">
                             {visibleMessages.map((msg) => (
                                 <div
                                     key={msg.id}
@@ -495,14 +571,12 @@ export default function ChatRoom() {
                                 >
                                     <div
                                         className={`
-                                                max-w-[92%] sm:max-w-[80%]
-                                                rounded-2xl
-                                                p-3 sm:p-4
-                                                text-[13px] sm:text-sm
-                                                ${msg.role === 'user'
+                      max-w-[92%] sm:max-w-[80%]
+                      rounded-2xl p-3 sm:p-4
+                      ${msg.role === 'user'
                                                 ? 'bg-[var(--g-200)] rounded-br-sm'
                                                 : 'bg-white border border-[var(--line)] rounded-bl-sm'}
-                                              `}
+                    `}
                                     >
                                         {msg.stepNumber && (
                                             <span className="text-[11px] sm:text-xs text-[var(--muted)] mb-1 block font-semibold">
@@ -514,11 +588,14 @@ export default function ChatRoom() {
                                             <img
                                                 src={msg.imageUrl}
                                                 alt="uploaded"
-                                                className="max-w-full rounded-lg mb-2 max-h-48 object-cover"
+                                                className="max-w-full rounded-lg mb-2 max-h-56 object-cover"
+                                                loading="lazy"
                                             />
                                         )}
 
-                                        <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                                        <p className="text-[13px] sm:text-sm whitespace-pre-wrap leading-[1.55]">
+                                            {msg.content}
+                                        </p>
                                     </div>
                                 </div>
                             ))}
@@ -551,6 +628,7 @@ export default function ChatRoom() {
                                 <button
                                     onClick={removeImage}
                                     className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full text-xs font-black"
+                                    aria-label="이미지 제거"
                                 >
                                     ✕
                                 </button>
@@ -586,10 +664,12 @@ export default function ChatRoom() {
                                         onChange={handleImageSelect}
                                         className="hidden"
                                     />
+
                                     <button
                                         onClick={() => fileInputRef.current?.click()}
-                                        className="p-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition"
+                                        className="w-11 h-11 grid place-items-center bg-gray-100 rounded-xl hover:bg-gray-200 transition shrink-0"
                                         title="이미지 업로드"
+                                        aria-label="이미지 업로드"
                                     >
                                         📷
                                     </button>
@@ -598,10 +678,27 @@ export default function ChatRoom() {
                                         <textarea
                                             value={inputText}
                                             onChange={(e) => setInputText(e.target.value)}
-                                            onKeyPress={handleKeyPress}
+                                            onCompositionStart={() => { isComposingRef.current = true; }}
+                                            onCompositionEnd={() => { isComposingRef.current = false; }}
+                                            onKeyDown={(e) => {
+                                                const native = e.nativeEvent as any;
+                                                if (isComposingRef.current || native?.isComposing) return;
+
+                                                if (e.key === "Enter" && !e.shiftKey) {
+                                                    e.preventDefault();
+                                                    if (e.repeat) return; // 키 꾹 누름 방지
+                                                    sendMessage();
+                                                }
+                                            }}
                                             placeholder={`Step ${currentStep}에서 궁금한 거 물어봐!`}
                                             rows={1}
-                                            className="w-full px-4 py-3 border border-[var(--line)] rounded-xl resize-none focus:outline-none focus:border-[rgba(69,197,138,.5)] text-[13px] sm:text-sm"
+                                            className="
+                        w-full px-4 py-3
+                        border border-[var(--line)]
+                        rounded-xl resize-none
+                        focus:outline-none focus:border-[rgba(69,197,138,.5)]
+                        text-[13px] sm:text-sm
+                      "
                                             style={{ minHeight: '48px', maxHeight: '120px' }}
                                         />
                                     </div>
@@ -609,14 +706,23 @@ export default function ChatRoom() {
                                     <button
                                         onClick={sendMessage}
                                         disabled={isLoading || (!inputText.trim() && !selectedImage)}
-                                        className="p-3 gradient-bg rounded-xl font-black disabled:opacity-50 transition hover:opacity-90"
-                                        aria-label="send"
+                                        className="
+                      w-11 h-11
+                      grid place-items-center
+                      gradient-bg rounded-xl
+                      font-black
+                      disabled:opacity-50
+                      transition hover:opacity-90
+                      shrink-0
+                    "
+                                        aria-label="전송"
+                                        title="전송"
                                     >
                                         ↑
                                     </button>
                                 </div>
 
-                                <p className="text-[11px] sm:text-xs text-[var(--muted)] mt-2 text-center">
+                                <p className="text-[11px] sm:text-xs text-[var(--muted)] mt-2 text-center font-semibold">
                                     📸 사진 찍어서 보내면 현재 Step {currentStep} 기준으로 피드백해줄게!
                                 </p>
                             </div>
