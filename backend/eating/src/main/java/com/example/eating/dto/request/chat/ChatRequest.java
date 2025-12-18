@@ -8,5 +8,5 @@ public class ChatRequest {
     private String session_id;
     private int step_number;
     private String message;
-    private String image_base64; // Optional
+    private String image_url; // Optional
 }
