@@ -3,6 +3,17 @@ import { useNavigate } from 'react-router-dom';
 import { analyzeVideo, getJobStatus, getResult, AnalysisResult, getFrameUrl } from './api/fastApi';
 import YouTube, { YouTubeProps } from 'react-youtube';
 
+const ANALYSIS_CACHE_KEY = "analysis_cache_v1";
+
+type CachedAnalysis = {
+  url: string;
+  videoId: string | null;
+  jobId: string;
+  result: AnalysisResult;
+  savedAt: number; // optional
+};
+
+
 function App() {
   const navigate = useNavigate();
   const [url, setUrl] = useState('');
@@ -81,6 +92,25 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(ANALYSIS_CACHE_KEY);
+      if (!raw) return;
+
+      const saved: CachedAnalysis = JSON.parse(raw);
+
+      // 복원
+      setUrl(saved.url ?? "");
+      setVideoId(saved.videoId ?? null);
+      setJobId(saved.jobId ?? null);
+      setResult(saved.result ?? null);
+
+    } catch (e) {
+      // 깨진 캐시라면 삭제
+      sessionStorage.removeItem(ANALYSIS_CACHE_KEY);
+    }
+  }, []);
+
   const normalizeProgress = (p: unknown) => {
     const n = typeof p === "number" ? p : Number(p);
     if (!Number.isFinite(n)) return 0;
@@ -101,6 +131,19 @@ function App() {
         const analysisResult = await getResult(currentJobId);
         setResult(analysisResult);
         setIsLoading(false);
+
+        const resolvedVideoId =
+          status.video_id ?? analysisResult.video_info?.video_id ?? extractVideoId(url);
+        // 세션 스토리지에 캐싱
+        const payload: CachedAnalysis = {
+          url,
+          videoId: resolvedVideoId,
+          jobId: currentJobId,
+          result: analysisResult,
+          savedAt: Date.now(),
+        };
+        sessionStorage.setItem(ANALYSIS_CACHE_KEY, JSON.stringify(payload));
+
         showToast("레시피 추출 완료!");
         return;
       }
@@ -126,6 +169,7 @@ function App() {
 
   // 분석 시작
   const handleAnalyze = async () => {
+    sessionStorage.removeItem(ANALYSIS_CACHE_KEY);
     if (pollTimerRef.current) {
       window.clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;

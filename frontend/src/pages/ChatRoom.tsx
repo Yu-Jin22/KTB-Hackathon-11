@@ -263,7 +263,7 @@ export default function ChatRoom() {
 
   if (!recipe) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="h-screen flex items-center justify-center">
         <div className="text-center">
           <p className="text-lg mb-4">레시피 정보가 없습니다.</p>
           <button
@@ -300,7 +300,7 @@ export default function ChatRoom() {
       : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-screen flex flex-col">
       {/* Header */}
       <header className="h-16 flex items-center justify-between px-4 bg-white/80 backdrop-blur-sm border-b border-[var(--line)] sticky top-0 z-50">
         <div className="flex items-center gap-3">
@@ -396,12 +396,13 @@ export default function ChatRoom() {
         )}
 
         {/* Chat Area */}
-        <main className="flex-1 flex flex-col bg-gray-50">
+        <main className="flex-1 flex flex-col overflow-hidden bg-gray-50">
           {/* Messages */}
           <div ref={messagesBoxRef}
             onScroll={handleScroll}
             className="flex-1 overflow-y-auto p-4">
-            <div className='min-h-full flex flex-col justify-end space-y-4'>
+            <div className='flex flex-col gap-4'>
+              <div className='flex-1' />
               {visibleMessages.map((msg, idx) => (
                 <div
                   key={idx}
@@ -466,71 +467,73 @@ export default function ChatRoom() {
           )}
 
           {/* Input Area */}
-          {cookingStatus === 'finished' ? (
-            /* 완료 화면 */
-            <div className="p-6 border-t border-[var(--line)] bg-gradient-to-br from-[var(--g-50)] to-[var(--o-50)]">
-              <div className="text-center">
-                <div className="text-4xl mb-3">🎉</div>
-                <h3 className="font-black text-lg mb-2">요리 완성!</h3>
-                <p className="text-sm text-[var(--muted)] mb-4">
-                  {recipe?.title}을(를) 성공적으로 완성했어요!
-                </p>
-                <button
-                  onClick={() => navigate('/')}
-                  className="w-full py-3 gradient-bg rounded-xl font-bold text-sm hover:opacity-90 transition"
-                >
-                  🏠 홈으로 돌아가기
-                </button>
+          <div className='shrink-0'>
+            {cookingStatus === 'finished' ? (
+              /* 완료 화면 */
+              <div className="p-6 border-t border-[var(--line)] bg-gradient-to-br from-[var(--g-50)] to-[var(--o-50)]">
+                <div className="text-center">
+                  <div className="text-4xl mb-3">🎉</div>
+                  <h3 className="font-black text-lg mb-2">요리 완성!</h3>
+                  <p className="text-sm text-[var(--muted)] mb-4">
+                    {recipe?.title}을(를) 성공적으로 완성했어요!
+                  </p>
+                  <button
+                    onClick={() => navigate('/')}
+                    className="w-full py-3 gradient-bg rounded-xl font-bold text-sm hover:opacity-90 transition"
+                  >
+                    🏠 홈으로 돌아가기
+                  </button>
+                </div>
               </div>
-            </div>
-          ) : (
-            /* 요리 중 입력 영역 */
-            <div className="p-4 border-t border-[var(--line)] bg-white">
-              <div className="flex items-end gap-2">
-                {/* Image Upload */}
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  accept="image/*"
-                  onChange={handleImageSelect}
-                  className="hidden"
-                />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="p-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition"
-                  title="이미지 업로드"
-                >
-                  📷
-                </button>
-
-                {/* Text Input */}
-                <div className="flex-1 relative">
-                  <textarea
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    placeholder={`Step ${currentStep}에서 궁금한 거 물어봐!`}
-                    rows={1}
-                    className="w-full px-4 py-3 border border-[var(--line)] rounded-xl resize-none focus:outline-none focus:border-[rgba(69,197,138,.5)] text-sm"
-                    style={{ minHeight: '48px', maxHeight: '120px' }}
+            ) : (
+              /* 요리 중 입력 영역 */
+              <div className="p-4 border-t border-[var(--line)] bg-white">
+                <div className="flex items-end gap-2">
+                  {/* Image Upload */}
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    accept="image/*"
+                    onChange={handleImageSelect}
+                    className="hidden"
                   />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="p-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition"
+                    title="이미지 업로드"
+                  >
+                    📷
+                  </button>
+
+                  {/* Text Input */}
+                  <div className="flex-1 relative">
+                    <textarea
+                      value={inputText}
+                      onChange={(e) => setInputText(e.target.value)}
+                      onKeyPress={handleKeyPress}
+                      placeholder={`Step ${currentStep}에서 궁금한 거 물어봐!`}
+                      rows={1}
+                      className="w-full px-4 py-3 border border-[var(--line)] rounded-xl resize-none focus:outline-none focus:border-[rgba(69,197,138,.5)] text-sm"
+                      style={{ minHeight: '48px', maxHeight: '120px' }}
+                    />
+                  </div>
+
+                  {/* Send Button */}
+                  <button
+                    onClick={sendMessage}
+                    disabled={isLoading || (!inputText.trim() && !selectedImage)}
+                    className="p-3 gradient-bg rounded-xl font-bold disabled:opacity-50 transition hover:opacity-90"
+                  >
+                    ↑
+                  </button>
                 </div>
 
-                {/* Send Button */}
-                <button
-                  onClick={sendMessage}
-                  disabled={isLoading || (!inputText.trim() && !selectedImage)}
-                  className="p-3 gradient-bg rounded-xl font-bold disabled:opacity-50 transition hover:opacity-90"
-                >
-                  ↑
-                </button>
+                <p className="text-xs text-[var(--muted)] mt-2 text-center">
+                  📸 사진 찍어서 보내면 현재 Step {currentStep} 기준으로 피드백해줄게!
+                </p>
               </div>
-
-              <p className="text-xs text-[var(--muted)] mt-2 text-center">
-                📸 사진 찍어서 보내면 현재 Step {currentStep} 기준으로 피드백해줄게!
-              </p>
-            </div>
-          )}
+            )}
+          </div>
         </main>
       </div>
     </div>
