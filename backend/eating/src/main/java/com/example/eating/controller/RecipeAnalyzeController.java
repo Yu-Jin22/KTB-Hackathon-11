@@ -14,31 +14,27 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/recipes")
 public class RecipeAnalyzeController {
 
-    private final RecipeJobService recipeJobService;
+  private final RecipeJobService recipeJobService;
 
-    @PostMapping("/analyze")
-    public RecipeJobCreateResponse analyze(
-            @RequestHeader("email") String email,
-            @RequestBody RecipeExtractRequest request
-    ) {
-        return recipeJobService.startAnalyze(email, request);
-    }
+  @PostMapping("/analyze")
+  public RecipeJobCreateResponse analyze(
+      @RequestHeader("email") String email,
+      @RequestBody RecipeExtractRequest request) {
+    return recipeJobService.startAnalyze(email, request);
+  }
 
-    @GetMapping("/status/{jobId}")
-    public RecipeJobStatusResponse getStatus(
-            @RequestHeader("email") String email,
-            @PathVariable String jobId
-    ) {
-        return recipeJobService.getStatus(email, jobId);
-    }
+  @GetMapping("/status/{jobId}")
+  public RecipeJobStatusResponse getStatus(
+      @RequestHeader("email") String email,
+      @PathVariable String jobId) {
+    return recipeJobService.getStatus(email, jobId);
+  }
 
-    @GetMapping("/result/{jobId}")
-    public APIResponse<RecipeResponse> getResult(
-            @RequestHeader("email") String email,
-            @PathVariable String jobId
-    ) {
-        return APIResponse.success("", recipeJobService.getResultAndSave(email, jobId));
-    }
-
+  @GetMapping("/result/{jobId}")
+  public APIResponse<RecipeResponse> getResult(
+      @RequestHeader("email") String email,
+      @PathVariable String jobId) {
+    return APIResponse.success("", recipeJobService.getResultAndSave(email, jobId));
+  }
 
 }
