@@ -98,14 +98,14 @@ function App() {
     };
   }, [loopEnabled, activeSegment]);
 
-  // 캐시 복원
+  // 캐시 복원 (새로고침 시: 결과는 복원하되, 입력창은 비움)
   useEffect(() => {
     try {
       const raw = sessionStorage.getItem(ANALYSIS_CACHE_KEY);
       if (!raw) return;
 
       const saved: CachedAnalysis = JSON.parse(raw);
-      setUrl(saved.url ?? "");
+      setUrl("");
       setVideoId(saved.videoId ?? null);
       setJobId(saved.jobId ?? null);
       setResult(saved.result ?? null);
@@ -130,7 +130,7 @@ function App() {
   };
 
   const handleAnalyze = async () => {
-    sessionStorage.removeItem(ANALYSIS_CACHE_KEY);
+    // sessionStorage.removeItem(ANALYSIS_CACHE_KEY);
 
     sseStopRef.current?.();
     sseStopRef.current = null;
@@ -145,7 +145,7 @@ function App() {
     }
 
     setError(null);
-    setResult(null);
+    // setResult(null);
     setIsLoading(true);
     setProgress(0);
     setMessage('분석 시작 중...');
@@ -187,6 +187,7 @@ function App() {
           showToast("분석 중 오류가 발생했어요.");
         },
         onError: () => {
+          setIsLoading(false);
           showToast("SSE 연결 오류");
         }
       });
