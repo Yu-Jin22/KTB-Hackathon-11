@@ -1,8 +1,6 @@
 package com.example.eating.dto.request.recipe;
 
-import lombok.Builder;
 import lombok.Getter;
-import lombok.NoArgsConstructor;
 
 import java.util.List;
 

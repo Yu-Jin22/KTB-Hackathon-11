@@ -13,14 +13,14 @@ import com.example.eating.service.AuthService;
 import lombok.RequiredArgsConstructor;
 
 @Controller
-@RequestMapping("auth")
+@RequestMapping("/auth")
 @RequiredArgsConstructor
 public class AuthController {
 
     private final AuthService authService;
 
     // 더미 유저 로그인 처리
-    // "loginId": "test", "loginPassword": "test"
+    // "email": "test@test.com", "password": "test"
     @PostMapping("/login")
     public ResponseEntity<LoginResponse> login(@RequestBody LoginDto dto) {
         LoginResponse response = authService.login(dto);

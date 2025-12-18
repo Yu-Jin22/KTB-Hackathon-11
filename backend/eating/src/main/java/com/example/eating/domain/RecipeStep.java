@@ -1,6 +1,5 @@
 package com.example.eating.domain;
 
-import com.example.eating.domain.Recipe;
 import jakarta.persistence.*;
 import lombok.Builder;
 import lombok.Getter;
@@ -37,7 +36,8 @@ public class RecipeStep {
     private Recipe recipe;
 
     @Builder
-    public RecipeStep(int stepNumber, String instruction, double timestamp, String duration, String details, String tips, String imageUrl, Recipe recipe) {
+    public RecipeStep(int stepNumber, String instruction, double timestamp, String duration, String details,
+            String tips, String imageUrl, Recipe recipe) {
         this.stepNumber = stepNumber;
         this.instruction = instruction;
         this.timestamp = timestamp;

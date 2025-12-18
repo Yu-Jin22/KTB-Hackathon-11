@@ -1,5 +1,5 @@
 import React from 'react';
-import { AnalysisResult, getFrameUrl } from '../api/fastApi'
+import { AnalysisResult, getFrameUrl } from '../api'
 import { Clock, Users, ChefHat, Lightbulb } from 'lucide-react';
 
 interface RecipeResultProps {

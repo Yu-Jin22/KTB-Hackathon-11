@@ -1,12 +1,12 @@
-package com.example.eating.dto.response.auth;
+package com.example.eating.dto.response.user;
 
 import lombok.Builder;
 import lombok.Getter;
 
 @Getter
 @Builder
-public class LoginResponse {
-    private boolean isLoginSuccess;
+public class SignupResponse {
+    private boolean isSignupSuccess;
     private String email;
     private String nickname;
 }

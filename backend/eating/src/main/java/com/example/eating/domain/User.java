@@ -14,15 +14,19 @@ public class User {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "login_id", unique = true, length = 64)
-    private String loginId;
+    @Column(name = "email", unique = true, length = 64)
+    private String email;
 
-    @Column(name = "login_password", length = 128)
-    private String loginPassword;
+    @Column(name = "password", length = 128)
+    private String password;
+
+    @Column(name = "nickname", length = 32)
+    private String nickname;
 
     @Builder
-    public User(String loginId, String loginPassword) {
-        this.loginId = loginId;
-        this.loginPassword = loginPassword;
+    public User(String email, String password, String nickname) {
+        this.email = email;
+        this.password = password;
+        this.nickname = nickname;
     }
 }

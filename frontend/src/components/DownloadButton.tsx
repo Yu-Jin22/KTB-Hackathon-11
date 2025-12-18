@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Download, FileText, File, ChevronDown } from 'lucide-react';
-import { downloadExport } from '../api/fastApi';
+import { downloadExport } from '../api';
 
 interface DownloadButtonProps {
   jobId: string | null;

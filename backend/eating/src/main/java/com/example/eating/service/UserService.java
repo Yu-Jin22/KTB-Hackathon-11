@@ -3,6 +3,8 @@ package com.example.eating.service;
 import org.springframework.stereotype.Service;
 
 import com.example.eating.domain.User;
+import com.example.eating.dto.request.user.SignupDto;
+import com.example.eating.dto.response.user.SignupResponse;
 import com.example.eating.repository.UserRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -12,11 +14,25 @@ import lombok.RequiredArgsConstructor;
 public class UserService {
     private final UserRepository userRepository;
 
-    public void saveUser(User user) {
-        if (user == null) {
-            throw new IllegalArgumentException("User cannot be null");
+    public SignupResponse signup(SignupDto dto) {
+        try {
+            User user = User.builder()
+                    .email(dto.getEmail().trim())
+                    .password(dto.getPassword().trim())
+                    .nickname(dto.getNickname().trim())
+                    .build();
+
+            User saved = userRepository.save(user);
+            return SignupResponse.builder()
+                    .isSignupSuccess(true)
+                    .email(saved.getEmail())
+                    .nickname(saved.getNickname())
+                    .build();
+        } catch (Exception e) {
+            return SignupResponse.builder()
+                    .isSignupSuccess(false)
+                    .build();
         }
-        userRepository.save(user);
     }
 
     public boolean existsById(Long userId) {
