@@ -29,6 +29,7 @@ interface Recipe {
 
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL + "/api/chat";
+const PRESIGNED_API_BASE = import.meta.env.VITE_API_BASE_URL + "/api/presigned-url";
 
 // Helper to get headers with email from localStorage
 const getAuthHeaders = () => {
@@ -38,6 +39,7 @@ const getAuthHeaders = () => {
         ...(email ? { email } : {})
     };
 };
+
 
 // 요리 완료 상태
 type CookingStatus = 'cooking' | 'finished';
@@ -105,6 +107,41 @@ export default function ChatRoom() {
         restoreScrollRef.current = null;
     }, [visibleCount]);
 
+    const uploadImageToS3 = async (file: File): Promise<string> => {
+        // 1️⃣ presigned-url 요청
+        const presignedRes = await fetch(PRESIGNED_API_BASE, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                fileName: file.name,
+                contentType: file.type
+            })
+        });
+
+        if (!presignedRes.ok) {
+            throw new Error("Presigned URL 발급 실패");
+        }
+
+        const { uploadUrl, fileUrl } = await presignedRes.json();
+
+        // 2️⃣ S3 PUT 업로드
+        const uploadRes = await fetch(uploadUrl, {
+            method: "PUT",
+            headers: {
+                "Content-Type": file.type
+            },
+            body: file
+        });
+
+        if (!uploadRes.ok) {
+            throw new Error("S3 업로드 실패");
+        }
+
+        // 3️⃣ 공개 접근 가능한 S3 파일 URL 반환
+        return fileUrl;
+    };
 
     const startSession = async () => {
         if (!recipe) return;
@@ -151,7 +188,6 @@ export default function ChatRoom() {
         }
     };
 
-    // 메시지 전송
     const sendMessage = async () => {
         if (!inputText.trim() && !selectedImage) return;
         if (!sessionId) return;
@@ -169,16 +205,11 @@ export default function ChatRoom() {
         setIsLoading(true);
 
         try {
-            let imageBase64 = null;
+            let imageUrl: string | null = null;
+
+            // ⭐ 이미지가 있으면 S3 업로드
             if (selectedImage) {
-                const reader = new FileReader();
-                imageBase64 = await new Promise<string>((resolve) => {
-                    reader.onloadend = () => {
-                        const base64 = (reader.result as string).split(',')[1];
-                        resolve(base64);
-                    };
-                    reader.readAsDataURL(selectedImage);
-                });
+                imageUrl = await uploadImageToS3(selectedImage);
             }
 
             const response = await fetch(`${API_BASE}/message`, {
@@ -188,7 +219,7 @@ export default function ChatRoom() {
                     session_id: sessionId,
                     step_number: currentStep,
                     message: inputText || '이 사진 봐줘',
-                    image_base64: imageBase64
+                    image_url: imageUrl // ⭐ 핵심 변경
                 })
             });
 
@@ -201,7 +232,6 @@ export default function ChatRoom() {
                 stepNumber: currentStep
             }]);
 
-            // 상태 업데이트
             if (data.session_status) {
                 setCompletedSteps(data.session_status.completed_steps || []);
             }

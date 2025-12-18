@@ -3,14 +3,11 @@
 
 단계별 피드백을 제공하는 채팅 엔드포인트를 제공합니다.
 """
-import base64
 import time
-import uuid
 from typing import Any, Dict, List, Optional
 
-import httpx
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from openai import APIConnectionError, APIError, OpenAI, RateLimitError
+from fastapi import APIRouter, HTTPException
+from openai import OpenAI
 
 from app.config import OPENAI_API_KEY, OPENAI_MODEL_CHAT
 from app.prompts import COOKING_ASSISTANT_PROMPT
@@ -27,19 +24,13 @@ from app.schemas.chat import (
 # =============================================================================
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
-# 타임아웃 설정 (채팅 응답 대기 시간 고려)
-http_client = httpx.Client(
-    timeout=httpx.Timeout(connect=30.0, read=120.0, write=30.0, pool=30.0)
-)
-client = OpenAI(api_key=OPENAI_API_KEY, http_client=http_client)
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # =============================================================================
 # 상수
 # =============================================================================
 MAX_HISTORY_MESSAGES = 6
 MAX_TOKENS = 500
-MAX_IMAGE_SIZE_MB = 10  # 최대 이미지 크기 (MB)
-MAX_IMAGE_SIZE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024
 SESSION_EXPIRY_SECONDS = 3600  # 세션 만료 시간 (1시간)
 API_MAX_RETRIES = 2  # API 호출 재시도 횟수
 
@@ -91,16 +82,16 @@ def _build_system_prompt(
 def _build_user_content(
     message: str,
     step_number: int,
-    image_base64: Optional[str] = None
+    image_url: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """사용자 메시지 콘텐츠를 구성합니다."""
     user_content: List[Dict[str, Any]] = []
 
-    if image_base64:
+    if image_url:
         user_content.append({
             "type": "image_url",
             "image_url": {
-                "url": f"data:image/jpeg;base64,{image_base64}"
+                "url": image_url
             }
         })
 
@@ -117,15 +108,6 @@ def _calculate_progress(completed: int, total: int) -> int:
     if total <= 0:
         return 0
     return int((completed / total) * 100)
-
-
-def _validate_image_size(image_bytes: bytes) -> None:
-    """이미지 크기를 검증합니다."""
-    if len(image_bytes) > MAX_IMAGE_SIZE_BYTES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"이미지 크기가 너무 큽니다. 최대 {MAX_IMAGE_SIZE_MB}MB까지 허용됩니다."
-        )
 
 
 def _cleanup_expired_sessions() -> None:
@@ -168,27 +150,14 @@ def _call_chat_api(
             )
 
             if not response.choices:
-                raise APIError("응답에 choices가 없습니다", response=None, body=None)
+                raise Exception("응답에 choices가 없습니다")
 
             return response.choices[0].message.content or ""
 
-        except RateLimitError as e:
-            last_error = e
-            # Rate limit은 재시도하지 않음
-            break
-
-        except APIConnectionError as e:
-            last_error = e
-            if attempt < max_retries:
-                continue
-
-        except APIError as e:
-            last_error = e
-            if attempt < max_retries:
-                continue
-
         except Exception as e:
             last_error = e
+            if attempt < max_retries:
+                continue
             break
 
     error_msg = str(last_error)[:100] if last_error else "알 수 없는 오류"
@@ -297,11 +266,6 @@ async def send_message(request: ChatRequest) -> ChatResponse:
 
     이미지가 포함되면 GPT-4o Vision으로 분석합니다.
     """
-    # 이미지 크기 검증
-    if request.image_base64:
-        image_bytes = base64.b64decode(request.image_base64)
-        _validate_image_size(image_bytes)
-
     session = _get_session(request.session_id)
     steps = session["steps"]
     step_number = request.step_number
@@ -332,7 +296,7 @@ async def send_message(request: ChatRequest) -> ChatResponse:
     user_content = _build_user_content(
         request.message,
         step_number,
-        request.image_base64
+        request.image_url
     )
     messages.append({"role": "user", "content": user_content})
 
@@ -340,20 +304,20 @@ async def send_message(request: ChatRequest) -> ChatResponse:
     reply = _call_chat_api(messages)
 
     # 히스토리에 저장 (이미지 포함 시 멀티모달 콘텐츠로 저장)
-    if request.image_base64:
+    if request.image_url:
         # 이미지가 있으면 멀티모달 형식으로 저장하여 컨텍스트 유지
         session["chat_history"].append({
             "role": "user",
             "content": user_content,  # 멀티모달 콘텐츠 그대로 저장
             "step_number": step_number,
-            "has_image": True
+            "image_url": request.image_url
         })
     else:
         session["chat_history"].append({
             "role": "user",
             "content": f"[Step {step_number} 진행 중] {request.message}",
             "step_number": step_number,
-            "has_image": False
+            "image_url": None
         })
 
     session["chat_history"].append({
@@ -384,36 +348,6 @@ async def send_message(request: ChatRequest) -> ChatResponse:
             "progress_percent": _calculate_progress(completed, total)
         }
     )
-
-
-@router.post("/message-with-image")
-async def send_message_with_image(
-    session_id: str = Form(...),
-    step_number: int = Form(...),
-    message: str = Form(...),
-    image: Optional[UploadFile] = File(None)
-) -> ChatResponse:
-    """
-    이미지 파일과 함께 메시지를 보냅니다.
-
-    multipart/form-data 형식을 사용합니다.
-    """
-    image_base64 = None
-
-    if image:
-        contents = await image.read()
-        # 이미지 크기 검증
-        _validate_image_size(contents)
-        image_base64 = base64.b64encode(contents).decode("utf-8")
-
-    request = ChatRequest(
-        session_id=session_id,
-        step_number=step_number,
-        message=message,
-        image_base64=image_base64
-    )
-
-    return await send_message(request)
 
 
 @router.get("/session/{session_id}/history")
