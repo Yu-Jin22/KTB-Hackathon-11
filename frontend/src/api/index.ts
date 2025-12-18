@@ -14,6 +14,16 @@ export const api = axios.create({
 /* Types (공통 모델은 여기서만 유지) */
 /* ------------------------------------------------------------------ */
 
+api.interceptors.request.use((config) => {
+    const email = localStorage.getItem("login_email");
+
+    if (email && config.headers) {
+        config.headers.set("email", email);
+    }
+
+    return config;
+});
+
 export interface Ingredient {
     name: string;
     amount: string;
@@ -69,12 +79,12 @@ export interface AnalysisResult {
 /* ------------------------------------------------------------------ */
 
 export interface AnalyzeResponse {
-    job_id: string;
+    jobId: string;
     message: string;
 }
 
 export interface JobStatus {
-    job_id: string;
+    jobId: string;
     status: "pending" | "processing" | "completed" | "failed";
     progress: number;
     message: string;
@@ -83,17 +93,17 @@ export interface JobStatus {
 
 // ✅ Spring이 /api/analyze, /api/status/:jobId ... 이런 식으로 제공한다는 전제
 export const analyzeVideo = async (url: string): Promise<AnalyzeResponse> => {
-    const { data } = await api.post("/analyze", { url });
+    const { data } = await api.post("/recipes/analyze", { url });
     return data;
 };
 
 export const getJobStatus = async (jobId: string): Promise<JobStatus> => {
-    const { data } = await api.get(`/status/${jobId}`);
+    const { data } = await api.get(`/recipes/status/${jobId}`);
     return data;
 };
 
 export const getResult = async (jobId: string): Promise<AnalysisResult> => {
-    const { data } = await api.get(`/result/${jobId}`);
+    const { data } = await api.get(`/recipes/result/${jobId}`);
     return data;
 };
 
@@ -159,7 +169,7 @@ export interface RecipeSavePayload {
     ingredients: Ingredient[];
     steps: Step[];
     tips?: string[];
-    // 필요하면 job_id, video_id, frames 등도 확장 가능
+    // 필요하면 jobId, video_id, frames 등도 확장 가능
 }
 
 export const saveRecipe = async (recipeData: RecipeSavePayload) => {
