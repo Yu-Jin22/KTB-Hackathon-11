@@ -198,23 +198,10 @@ def _call_chat_api(
     )
 
 
-# =============================================================================
-# 세션 관리 API
-# =============================================================================
 @router.post("/start", response_model=StartSessionResponse)
-async def start_cooking_session(
-    request: StartSessionRequest
-) -> StartSessionResponse:
-    """
-    요리 세션을 시작합니다.
+async def start_cooking_session(request: StartSessionRequest):
 
-    레시피 정보를 받아서 채팅 세션을 생성합니다.
-    """
-    # 만료된 세션 정리
-    _cleanup_expired_sessions()
-
-    # 전체 UUID 사용으로 충돌 방지
-    session_id = str(uuid.uuid4())
+    session_id = request.session_id  # ⭐ Spring 기준
     recipe = request.recipe
     steps = recipe.get("steps", [])
 
@@ -225,8 +212,7 @@ async def start_cooking_session(
         "steps": steps,
         "completed_steps": [],
         "chat_history": [],
-        "ingredients": recipe.get("ingredients", []),
-        "created_at": time.time()  # 세션 생성 시간 기록
+        "created_at": time.time()
     }
 
     return StartSessionResponse(
