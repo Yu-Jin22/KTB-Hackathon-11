@@ -11,7 +11,9 @@ import com.example.eating.dto.response.user.SignupResponse;
 import com.example.eating.service.UserService;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @Controller
 @RequestMapping("/user")
 @RequiredArgsConstructor
@@ -21,6 +23,7 @@ public class UserController {
 
     @PostMapping("/signup")
     public ResponseEntity<SignupResponse> signup(@RequestBody SignupDto dto) {
+        log.info("event=signup Method=POST path=/user/signup email={}", dto.getEmail());
         SignupResponse response = userService.signup(dto);
         return ResponseEntity.ok(response);
     }

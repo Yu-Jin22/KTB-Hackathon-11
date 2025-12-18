@@ -11,7 +11,9 @@ import com.example.eating.dto.response.auth.LoginResponse;
 import com.example.eating.service.AuthService;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @Controller
 @RequestMapping("/auth")
 @RequiredArgsConstructor
@@ -19,11 +21,13 @@ public class AuthController {
 
     private final AuthService authService;
 
-    // 더미 유저 로그인 처리
-    // "email": "test@test.com", "password": "test"
     @PostMapping("/login")
     public ResponseEntity<LoginResponse> login(@RequestBody LoginDto dto) {
+        log.info("event=http_in method=POST path=/api/auth/login email={}", dto.getEmail());
+
         LoginResponse response = authService.login(dto);
+
+        log.info("event=login_success method=POST path=/api/auth/login login_success={}", response.isLoginSuccess());
         return ResponseEntity.ok().body(response);
     }
 }

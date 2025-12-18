@@ -8,6 +8,10 @@ import logging
 import shutil
 import time
 import uuid
+import httpx
+import os
+from datetime import datetime
+from typing import Optional
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -175,6 +179,13 @@ async def _step_download(
         progress=5
     )
 
+    await push_progress_to_spring(
+            job_id=job_id,
+            status="processing",
+            progress=5,
+            step="download",
+            message="📥 영상 다운로드 중..."
+        )
     try:
         video_info = await download_video(url, str(job_dir))
     except YouTubeDownloadError as e:
@@ -187,6 +198,14 @@ async def _step_download(
         video_info=video_info
     )
 
+    await push_progress_to_spring(
+            job_id=job_id,
+            status="processing",
+            progress=25,
+            step="download",
+            message="✅ 다운로드 완료!"
+        )
+    
     return video_info
 
 
@@ -247,6 +266,14 @@ async def _step_extract_transcript(
             progress=35
         )
 
+        await push_progress_to_spring(
+            job_id=job_id,
+            status="processing",
+            progress=35,
+            step="download",
+            message="🎤 음성 인식 중... (Whisper AI)"
+        )
+        
         try:
             transcript = await transcribe_audio(audio_path)
             transcript_source = "whisper"
@@ -273,6 +300,13 @@ async def _step_extract_transcript(
         progress=50
     )
 
+    await push_progress_to_spring(
+            job_id=job_id,
+            status="processing",
+            progress=50,
+            step="download",
+            message="✅ 텍스트 추출 완료!"
+        )
     return transcript, transcript_source
 
 
@@ -308,6 +342,14 @@ async def _step_parse_recipe(
         progress=55
     )
 
+    await push_progress_to_spring(
+            job_id=job_id,
+            status="processing",
+            progress=55,
+            step="parsing",
+            message="🤖 GPT-4o로 레시피 분석 중..."
+        )
+    
     try:
         recipe = await parse_recipe(transcript)
     except RecipeParseError as e:
@@ -319,6 +361,13 @@ async def _step_parse_recipe(
         progress=90
     )
 
+    await push_progress_to_spring(
+            job_id=job_id,
+            status="processing",
+            progress=90,
+            step="frames",
+            message="✅ 레시피 분석 완료!"
+        )
     return recipe
 
 
@@ -383,6 +432,13 @@ async def process_video(job_id: str, url: str) -> None:
             }
         )
 
+        await push_progress_to_spring(
+            job_id=job_id,
+            status="completed",
+            progress=100,
+            step="done",
+            message="🎉 레시피 추출 완료!"
+        )
     except Exception as e:
         error_message = str(e)
         logger.error(f"[{job_id[:8]}] 처리 오류: {error_message}")
@@ -394,6 +450,13 @@ async def process_video(job_id: str, url: str) -> None:
             progress=0
         )
 
+        await push_progress_to_spring(
+            job_id=job_id,
+            status="failed",
+            progress=0,
+            step="done",
+            message=f"오류 발생: {error_message}"
+        )
 
 # =============================================================================
 # API 엔드포인트
@@ -532,3 +595,43 @@ async def get_stats() -> Dict[str, Any]:
         작업 통계 정보
     """
     return job_manager.get_stats()
+
+# =============================================================================
+# Spring BE 콜백
+# =============================================================================
+
+
+# ✅ Spring 콜백 대상 (상수로 고정)
+SPRING_BASE = os.getenv("SPRING_BASE")
+PROGRESS_WEBHOOK_PATH = "/api/internal/jobs/{jobId}/progress"
+WEBHOOK_TIMEOUT = 5.0
+
+async def push_progress_to_spring(
+    *,
+    job_id: str,
+    status: str,
+    progress: int,
+    step: str,
+    message: str,
+) -> None:
+    """
+    FastAPI -> Spring 내부 progress 콜백 전송
+    - 실패해도 작업은 계속 진행 (로그만)
+    - Spring DTO 기준: jobId / videoId
+    """
+    payload = {
+        "status": status,              # pending|processing|completed|failed
+        "progress": int(progress),     # 0~100
+        "step": step,
+        "message": message
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT) as client:
+            await client.post(
+                f"{SPRING_BASE}{PROGRESS_WEBHOOK_PATH.format(jobId=job_id)}",
+                json=payload,
+            )
+    except Exception as e:
+        # 콜백 실패가 job 처리 실패로 이어지면 안 됨
+        print(f"[push_progress_to_spring] failed: {e}")
