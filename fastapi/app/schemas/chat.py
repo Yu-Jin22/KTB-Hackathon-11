@@ -9,8 +9,7 @@ from pydantic import BaseModel
 
 
 class StartSessionRequest(BaseModel):
-    """세션 시작 요청."""
-
+    session_id: str
     recipe: Dict[str, Any]
 
 
