@@ -13,7 +13,7 @@ import com.example.eating.service.AuthService;
 import lombok.RequiredArgsConstructor;
 
 @Controller
-@RequestMapping("auth")
+@RequestMapping("/auth")
 @RequiredArgsConstructor
 public class AuthController {
 
