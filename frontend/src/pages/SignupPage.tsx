@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AuthShell from "./AuthShell";
+import { signupApi } from "../api";
 
 export default function SignupPage() {
     const navigate = useNavigate();
@@ -35,7 +36,7 @@ export default function SignupPage() {
 
         setLoading(true);
         try {
-            // await signupApi({ username, password, nickname: nickname.trim() || undefined });
+            await signupApi({ username, password, nickname: nickname.trim() || undefined });
 
             showToast("회원가입 완료! 로그인해볼까요? ✅");
             setTimeout(() => navigate("/login"), 350);

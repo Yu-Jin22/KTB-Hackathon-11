@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import AuthShell from "./AuthShell";
+import { loginApi } from "../api";
 
 export default function LoginPage() {
     const navigate = useNavigate();
@@ -24,7 +25,7 @@ export default function LoginPage() {
 
         setLoading(true);
         try {
-            // await loginApi({ username, password });
+            await loginApi({ username, password });
 
             showToast("로그인 완료! 저장 기능을 사용할 수 있어요 ✅");
             const from = location?.state?.from || "/";
