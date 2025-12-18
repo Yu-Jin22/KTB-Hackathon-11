@@ -1,5 +1,6 @@
 package com.example.eating.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -7,10 +8,13 @@ import org.springframework.web.reactive.function.client.WebClient;
 @Configuration
 public class WebClientConfig {
 
+    @Value("${fast.base-url}")
+    private String baseUrl;
+
     @Bean
     public WebClient fastApiClient() {
         return WebClient.builder()
-                .baseUrl("http://localhost:8000") // FastAPI 주소
+                .baseUrl(baseUrl)
                 .build();
     }
 }

@@ -10,7 +10,7 @@ spring:
 
     jpa:
         hibernate:
-            ddl-auto: create
+            ddl-auto: update
         properties:
             hibernate:
                 format_sql: true
@@ -39,3 +39,6 @@ logging:
 server:
     servlet:
         context-path: /api
+
+fast:
+  base-url: ${FAST_API_BASEURL}
