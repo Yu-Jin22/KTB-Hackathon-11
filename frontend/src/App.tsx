@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { analyzeVideo, getJobStatus, getResult, AnalysisResult, getFrameUrl } from './api';
+import { analyzeVideo, getResult, AnalysisResult, getFrameUrl } from './api';
 import YouTube, { YouTubeProps } from 'react-youtube';
 import { subscribe } from './api';
 
@@ -11,9 +11,8 @@ type CachedAnalysis = {
   videoId: string | null;
   jobId: string;
   result: AnalysisResult;
-  savedAt: number; // optional
+  savedAt: number;
 };
-
 
 function App() {
   const navigate = useNavigate();
@@ -33,8 +32,8 @@ function App() {
   const loopTimerRef = useRef<number | null>(null);
   const playerRef = useRef<any>(null);
   const sseStopRef = useRef<null | (() => void)>(null);
+  const videoCardRef = useRef<HTMLDivElement | null>(null);
 
-  // Toast 표시
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
@@ -42,7 +41,7 @@ function App() {
 
   // URL에서 Video ID(또는 Shortcode) 추출
   // - YouTube: videoId (예: dQw4w9WgXcQ)
-  // - TikTok: videoId (숫자, 예: 7291234567890123456)  ※ vt/vm 짧은 링크는 "코드"만 있어 정규식만으로 videoId 추출 불가
+  // - TikTok: videoId (숫자, 예: 7291234567890123456)  ※ vt/vm 짧은 링크는 정규식만으로 videoId 추출 불가(리다이렉트 필요)
   // - Instagram Reels: shortcode (예: CuQx1AbCdEf)
   const extractVideoId = (inputUrl: string): string | null => {
     const patterns: RegExp[] = [
@@ -52,14 +51,13 @@ function App() {
       /(?:^|\/\/)(?:www\.)?youtu\.be\/([a-zA-Z0-9_-]+)/,
 
       // ✅ TikTok (direct URL에서만 videoId 추출 가능)
+      // - https://www.tiktok.com/@{username}/video/{videoId}
       /(?:^|\/\/)(?:www\.|m\.)?tiktok\.com\/@[^/]+\/video\/(\d+)/,
 
-      // ❌ TikTok short link (정규식으로는 "code"만 추출 가능, videoId는 없음)
-      // - https://vt.tiktok.com/{code}/
-      // - https://vm.tiktok.com/{code}/
-
-      // ✅ Instagram Reels (shortcode 추출)
-      /(?:^|\/\/)(?:www\.)?instagram\.com\/reel\/([a-zA-Z0-9_-]+)\/?/,
+      // ✅ Instagram (reel/p/tv shortcode)
+      // - https://www.instagram.com/reel/{shortcode}/
+      // - https://www.instagram.com/p/{shortcode}/
+      // - https://www.instagram.com/tv/{shortcode}/
       /(?:^|\/\/)(?:www\.)?instagram\.com\/(?:reel|p|tv)\/([a-zA-Z0-9_-]+)\/?/,
     ];
 
@@ -70,8 +68,6 @@ function App() {
     return null;
   };
 
-
-  // URL 변경 시 video ID 업데이트
   useEffect(() => {
     const id = extractVideoId(url);
     setVideoId(id);
@@ -98,47 +94,41 @@ function App() {
     }
 
     return () => {
-      if (loopTimerRef.current) {
-        clearInterval(loopTimerRef.current);
-      }
+      if (loopTimerRef.current) clearInterval(loopTimerRef.current);
     };
   }, [loopEnabled, activeSegment]);
 
+  // 캐시 복원
   useEffect(() => {
     try {
       const raw = sessionStorage.getItem(ANALYSIS_CACHE_KEY);
       if (!raw) return;
 
       const saved: CachedAnalysis = JSON.parse(raw);
-
-      // 복원
       setUrl(saved.url ?? "");
       setVideoId(saved.videoId ?? null);
       setJobId(saved.jobId ?? null);
       setResult(saved.result ?? null);
-
-    } catch (e) {
-      // 깨진 캐시라면 삭제
+    } catch {
       sessionStorage.removeItem(ANALYSIS_CACHE_KEY);
     }
   }, []);
 
+  // 언마운트 시 SSE 정리
   useEffect(() => {
     return () => {
       sseStopRef.current?.();
       sseStopRef.current = null;
-    }
-  }, [])
+    };
+  }, []);
 
   const normalizeProgress = (p: unknown) => {
     const n = typeof p === "number" ? p : Number(p);
     if (!Number.isFinite(n)) return 0;
-    // 0~1이면 0~100으로 변환
     const pct = n <= 1 ? n * 100 : n;
     return Math.max(0, Math.min(100, Math.round(pct)));
   };
 
-  // 분석 시작
   const handleAnalyze = async () => {
     sessionStorage.removeItem(ANALYSIS_CACHE_KEY);
 
@@ -149,9 +139,8 @@ function App() {
       showToast('링크를 먼저 넣어줘!');
       return;
     }
-
     if (!videoId) {
-      showToast('유효한 YouTube 링크가 아닌 것 같아.');
+      showToast('유효한 링크가 아닌 것 같아.');
       return;
     }
 
@@ -172,26 +161,23 @@ function App() {
 
       sseStopRef.current = subscribe(response.jobId, {
         onProgress: (payload) => {
-          // payload: { jobId, status, progress, message}
-          const p = typeof payload.progress === "number" ? payload.progress : 0;
-          setProgress(Math.max(0, Math.min(100, Math.round(p))));
+          const p = normalizeProgress(payload.progress);
+          setProgress(p);
           setMessage(payload.message ?? "처리 중...");
         },
         onCompleted: async () => {
-          // 3) 완료되면 최종 결과 받아오기
           const analysisResult = await getResult(response.jobId);
           setResult(analysisResult);
           setIsLoading(false);
 
-          // 캐시 저장
-          const payload = {
+          const cachePayload: CachedAnalysis = {
             url,
             videoId,
             jobId: response.jobId,
             result: analysisResult,
             savedAt: Date.now(),
-          }
-          sessionStorage.setItem(ANALYSIS_CACHE_KEY, JSON.stringify(payload));
+          };
+          sessionStorage.setItem(ANALYSIS_CACHE_KEY, JSON.stringify(cachePayload));
 
           showToast('레시피 추출 완료!');
         },
@@ -201,25 +187,20 @@ function App() {
           showToast("분석 중 오류가 발생했어요.");
         },
         onError: () => {
-          // SSE 연결 문제(프록시/서버 다운 등)
           showToast("SSE 연결 오류");
         }
       });
-    } catch (err) {
+    } catch {
       setError('분석 시작 중 오류가 발생했습니다.');
       setIsLoading(false);
       showToast('분석 시작 중 오류가 발생했어요.');
     }
   };
 
-  // Enter 키 처리
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !isLoading) {
-      handleAnalyze();
-    }
+    if (e.key === 'Enter' && !isLoading) handleAnalyze();
   };
 
-  // 클립보드 붙여넣기
   const handlePaste = async () => {
     try {
       const text = await navigator.clipboard.readText();
@@ -229,34 +210,32 @@ function App() {
       } else {
         showToast('클립보드가 비어있어.');
       }
-    } catch (err) {
+    } catch {
       showToast('브라우저 권한 때문에 실패. 직접 붙여넣어줘!');
     }
   };
 
   const isAuthed = () => !!localStorage.getItem("access_token");
 
-  // 저장 토글
   const toggleSave = () => {
     if (!isAuthed()) {
       showToast("저장은 로그인 후 사용할 수 있어요 🙂");
       navigate("/login", { state: { from: "/", reason: "save" } });
       return;
     }
-    setIsSaved(!isSaved);
+    setIsSaved((v) => !v);
     showToast(isSaved ? '저장을 해제했어.' : '레시피를 저장했어!');
   };
 
-  // 구간 반복 토글
   const toggleLoop = () => {
-    setLoopEnabled(!loopEnabled);
+    setLoopEnabled((v) => !v);
     showToast(!loopEnabled ? '구간 반복 ON' : '구간 반복 OFF');
   };
 
-  // 타임라인 세그먼트 클릭
   const playSegment = (step: { timestamp?: number; step_number: number; instruction: string }) => {
+    videoCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
     const start = step.timestamp || 0;
-    const end = start + 10; // 기본 10초 구간
+    const end = start + 10;
 
     setActiveSegment({ start, end });
 
@@ -265,7 +244,7 @@ function App() {
       player.seekTo(start, true);
       player.playVideo();
     } else {
-      showToast("플레이어 준비중... 한 번 더 눌러줘!")
+      showToast("플레이어 준비중... 한 번 더 눌러줘!");
     }
 
     if (loopEnabled) {
@@ -275,7 +254,6 @@ function App() {
     }
   };
 
-  // 시간 포맷
   const formatTime = (seconds: number): string => {
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
@@ -292,90 +270,193 @@ function App() {
 
   const authed = !!localStorage.getItem("access_token");
 
-
   return (
     <div className="min-h-screen">
       {/* Topbar */}
-      <header className="h-[72px] flex items-center justify-between px-[22px] sticky top-0 z-50 backdrop-blur-[10px] bg-white/[.78] border-b border-[var(--line)]">
-        <div className="flex items-center gap-3 select-none">
-          <div className="logo-gradient logo-shine w-10 h-10 rounded-[14px] shadow-[0_12px_22px_rgba(17,24,39,.10)] relative overflow-hidden" />
-          <h1 className="text-base m-0 tracking-[-0.3px] flex gap-2 items-baseline font-black">
+      <header
+        className="
+          h-[64px] sm:h-[72px]
+          flex items-center justify-between
+          px-4 sm:px-[22px]
+          sticky top-0 z-50
+          backdrop-blur-[10px] bg-white/[.78]
+          border-b border-[var(--line)]
+        "
+      >
+        <div className="flex items-center gap-3 select-none min-w-0">
+          <div className="logo-gradient logo-shine w-9 h-9 sm:w-10 sm:h-10 rounded-[14px] shadow-[0_12px_22px_rgba(17,24,39,.10)] relative overflow-hidden" />
+          <h1 className="text-[14px] sm:text-base m-0 tracking-[-0.3px] flex gap-2 items-baseline font-black truncate">
             오늘 뭐먹지
-            <span className="text-xs px-[9px] py-[3px] rounded-full border border-[var(--line)] bg-white/85 text-[rgba(23,34,51,.70)] font-extrabold">
+            <span className="text-[10px] sm:text-xs px-2 sm:px-[9px] py-[3px] rounded-full border border-[var(--line)] bg-white/85 text-[rgba(23,34,51,.70)] font-extrabold">
               beta
             </span>
           </h1>
         </div>
 
-        <div className="flex items-center gap-[10px]">
+        <div className="flex items-center gap-2 sm:gap-[10px]">
           {!authed ? (
             <button
               onClick={() => navigate("/login", { state: { from: "/" } })}
-              className="pill px-3 py-[10px] rounded-full border border-[var(--line)] bg-white/90 text-[rgba(23,34,51,.86)] text-[13px] flex gap-2 items-center cursor-pointer transition-all shadow-[var(--shadow2)] font-black hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]"
+              className="
+                pill px-3 py-[9px] sm:py-[10px]
+                rounded-full border border-[var(--line)]
+                bg-white/90 text-[rgba(23,34,51,.86)]
+                text-[12.5px] sm:text-[13px]
+                flex gap-2 items-center cursor-pointer
+                transition-all shadow-[var(--shadow2)]
+                font-black hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]
+              "
             >
               🔐 로그인
             </button>
           ) : (
             <button
               onClick={() => { localStorage.removeItem("access_token"); showToast("로그아웃했어."); }}
-              className="pill px-3 py-[10px] rounded-full border border-[var(--line)] bg-white/90 text-[rgba(23,34,51,.86)] text-[13px] flex gap-2 items-center cursor-pointer transition-all shadow-[var(--shadow2)] font-black hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]"
+              className="
+                pill px-3 py-[9px] sm:py-[10px]
+                rounded-full border border-[var(--line)]
+                bg-white/90 text-[rgba(23,34,51,.86)]
+                text-[12.5px] sm:text-[13px]
+                flex gap-2 items-center cursor-pointer
+                transition-all shadow-[var(--shadow2)]
+                font-black hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]
+              "
             >
               🚪 로그아웃
             </button>
           )}
+
           <button
             onClick={toggleSave}
-            className="pill px-3 py-[10px] rounded-full border border-[var(--line)] bg-white/90 text-[rgba(23,34,51,.86)] text-[13px] flex gap-2 items-center cursor-pointer transition-all shadow-[var(--shadow2)] font-black hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]"
+            className="
+              pill px-3 py-[9px] sm:py-[10px]
+              rounded-full border border-[var(--line)]
+              bg-white/90 text-[rgba(23,34,51,.86)]
+              text-[12.5px] sm:text-[13px]
+              flex gap-2 items-center cursor-pointer
+              transition-all shadow-[var(--shadow2)]
+              font-black hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]
+            "
           >
             <span>{isSaved ? '✅' : '⭐'}</span> {isSaved ? '저장됨' : '저장'}
           </button>
         </div>
       </header>
 
-      <main className="w-[min(1140px,calc(100%-32px))] mx-auto py-9 pb-24">
+      <main
+        className="
+          w-full max-w-[1140px]
+          px-4 sm:px-6 lg:px-0
+          mx-auto
+          py-7 sm:py-9
+          pb-20 sm:pb-24
+        "
+      >
         {/* Hero Section */}
-        <section className="mt-11 flex flex-col items-center text-center gap-[14px]">
-          <h2 className="text-[46px] leading-[1.05] m-0 tracking-[-1px] font-black">
+        <section className="mt-7 sm:mt-11 flex flex-col items-center text-center gap-3 sm:gap-[14px]">
+          <h2
+            className="
+              text-[30px] sm:text-[40px] lg:text-[46px]
+              leading-[1.08] sm:leading-[1.05]
+              m-0 tracking-[-1px]
+              font-black
+              px-2
+            "
+          >
             쇼츠 레시피, <span className="gradient-text">한눈에 따라하기</span>
           </h2>
-          <p className="m-0 text-[15px] text-[var(--muted)] max-w-[820px] leading-[1.65] font-semibold">
-            유튜브 쇼츠 링크만 넣으면 재료·조리 순서·타임라인 컷을 정리해서 "따라 하기" 쉬운 형태로 보여줘요.
+
+          <p
+            className="
+              m-0
+              text-[13.5px] sm:text-[15px]
+              text-[var(--muted)]
+              max-w-[820px]
+              leading-[1.65]
+              font-semibold
+              px-2
+            "
+          >
+            유튜브 쇼츠 링크만 넣으면 재료·조리 순서·타임라인 컷을 정리해서 &quot;따라 하기&quot; 쉬운 형태로 보여줘요.
           </p>
 
           {/* Search Bar */}
-          <div className="mt-6 w-[min(900px,100%)]">
-            <div className={`flex items-center gap-[10px] px-[14px] py-[14px] rounded-full bg-white/[.96] border border-[var(--line)] shadow-[var(--shadow)] transition-all ${url ? 'border-[rgba(69,197,138,.45)] translate-y-[-1px] shadow-[0_18px_42px_rgba(17,24,39,.12)]' : ''}`}>
-              <svg className="w-[22px] h-[22px]" viewBox="0 0 24 24" fill="none">
+          <div className="mt-5 sm:mt-6 w-full max-w-[900px]">
+            <div
+              className={`
+                flex flex-col sm:flex-row
+                items-stretch sm:items-center
+                gap-2 sm:gap-[10px]
+                px-3 sm:px-[14px]
+                py-3 sm:py-[14px]
+                rounded-2xl sm:rounded-full
+                bg-white/[.96]
+                border border-[var(--line)]
+                shadow-[var(--shadow)]
+                transition-all
+                ${url ? 'border-[rgba(69,197,138,.45)] sm:translate-y-[-1px] shadow-[0_18px_42px_rgba(17,24,39,.12)]' : ''}
+              `}
+            >
+              <svg className="hidden sm:block w-[22px] h-[22px]" viewBox="0 0 24 24" fill="none">
                 <path d="M10.5 18.5a8 8 0 1 1 5.2-14.1A8 8 0 0 1 10.5 18.5Z" stroke="rgba(23,34,51,.70)" strokeWidth="1.7" />
                 <path d="M16.6 16.6 21 21" stroke="rgba(23,34,51,.55)" strokeWidth="1.7" strokeLinecap="round" />
               </svg>
+
               <input
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="유튜브 쇼츠 링크를 붙여넣어 주세요 (https://youtube.com/shorts/...)"
+                placeholder="유튜브/틱톡/릴스 링크를 붙여넣어 주세요"
                 disabled={isLoading}
-                className="flex-1 border-none outline-none bg-transparent text-[var(--ink)] text-[15px] p-1 font-semibold placeholder:text-[rgba(95,109,124,.95)] disabled:opacity-50"
+                className="
+                  flex-1
+                  border-none outline-none bg-transparent
+                  text-[15px]
+                  p-2 sm:p-1
+                  font-semibold
+                  placeholder:text-[rgba(95,109,124,.95)]
+                  disabled:opacity-50
+                "
               />
+
               <button
                 onClick={handleAnalyze}
                 disabled={isLoading}
-                className="border-none cursor-pointer px-[14px] py-[10px] rounded-full text-[13px] text-[rgba(23,34,51,.92)] gradient-bg border border-[rgba(23,34,51,.08)] transition-all font-black flex items-center gap-2 whitespace-nowrap hover:translate-y-[-1px] hover:brightness-[1.02] active:translate-y-0 disabled:opacity-75 disabled:cursor-not-allowed"
+                className="
+                  border-none cursor-pointer
+                  px-4 py-3 sm:px-[14px] sm:py-[10px]
+                  rounded-xl sm:rounded-full
+                  text-[13px]
+                  text-[rgba(23,34,51,.92)]
+                  gradient-bg
+                  border border-[rgba(23,34,51,.08)]
+                  transition-all
+                  font-black
+                  flex items-center justify-center gap-2
+                  whitespace-nowrap
+                  hover:translate-y-[-1px] hover:brightness-[1.02]
+                  active:translate-y-0
+                  disabled:opacity-75 disabled:cursor-not-allowed
+                "
               >
-                {isLoading ? (
-                  <>⏳ 처리 중...</>
-                ) : (
-                  <>✨ 레시피 추출</>
-                )}
+                {isLoading ? <>⏳ 처리 중...</> : <>✨ 레시피 추출</>}
               </button>
             </div>
 
             {/* Hint Row */}
-            <div className="mt-3 flex justify-center gap-[10px] flex-wrap text-[rgba(95,109,124,.95)] text-[12.5px] font-semibold">
+            <div className="mt-3 flex justify-center gap-2 sm:gap-[10px] flex-wrap text-[rgba(95,109,124,.95)] text-[12.5px] font-semibold">
               <button
                 onClick={handlePaste}
-                className="px-[11px] py-2 rounded-full bg-white/[.92] border border-[var(--line)] cursor-pointer transition-all select-none shadow-[var(--shadow2)] font-extrabold hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]"
+                className="
+                  px-[11px] py-2
+                  rounded-full bg-white/[.92]
+                  border border-[var(--line)]
+                  cursor-pointer transition-all select-none
+                  shadow-[var(--shadow2)]
+                  font-extrabold
+                  hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]
+                "
               >
                 클립보드 붙여넣기
               </button>
@@ -384,7 +465,7 @@ function App() {
 
           {/* Loading Progress */}
           {isLoading && (
-            <div className="mt-4 w-[min(600px,100%)] text-center">
+            <div className="mt-4 w-full max-w-[600px] text-center px-1">
               <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
                 <div
                   className="h-full gradient-bg transition-all duration-300"
@@ -397,58 +478,96 @@ function App() {
 
           {/* Error Message */}
           {error && (
-            <div className="mt-4 px-4 py-3 rounded-xl bg-red-50 text-red-600 text-sm">
+            <div className="mt-4 px-4 py-3 rounded-xl bg-red-50 text-red-600 text-sm w-full max-w-[720px]">
               {error}
             </div>
           )}
 
-          <p className="text-[rgba(95,109,124,.95)] text-[12.5px] font-semibold mt-2">
-            타임라인 컷을 누르면 영상이 그 구간으로 이동하고, "구간 반복"을 켜면 해당 구간만 반복 재생해요.
+          <p className="text-[rgba(95,109,124,.95)] text-[12.5px] font-semibold mt-1 sm:mt-2 px-2">
+            타임라인 컷을 누르면 영상이 그 구간으로 이동하고, &quot;구간 반복&quot;을 켜면 해당 구간만 반복 재생해요.
           </p>
         </section>
 
         {/* Results Section */}
         {result && (
-          <section className="mt-[38px] flex flex-col gap-[18px]">
+          <section className="mt-7 sm:mt-[38px] flex flex-col gap-4 sm:gap-[18px]">
             {/* Section Header */}
-            <div className="sticky top-[calc(var(--stickyTop)+10px)] z-40 p-[14px_16px] rounded-2xl border border-[var(--line)] gradient-bg-soft shadow-[var(--shadow2)] flex items-center justify-between gap-3 backdrop-blur-[8px]">
-              <div className="min-w-0 flex flex-col gap-[6px]">
-                <div className="text-xs text-[rgba(23,34,51,.70)] font-black tracking-[.1px]">레시피 결과</div>
-                <div className="flex items-center gap-[10px] flex-wrap min-w-0">
-                  <h3 className="text-xl font-black tracking-[-0.5px] m-0 whitespace-nowrap overflow-hidden text-ellipsis max-w-[min(720px,72vw)]">
-                    {result.recipe.title}
-                  </h3>
-                  <span className="px-[10px] py-[6px] rounded-full border border-[var(--line)] bg-white/[.92] text-[var(--muted)] text-xs font-black whitespace-nowrap">
-                    {result.recipe.total_time || '?분'} · {result.recipe.servings || '1인분'}
-                  </span>
-                </div>
-              </div>
+            <div
+              className="
+                flex items-center justify-end
+                gap-2
+                flex-nowrap
+                overflow-hidden
+                "
+            >
+              {/* 난이도: 모바일에서는 라벨을 짧게 */}
+              <span
+                className="
+                  px-2 py-[6px]
+                  rounded-full border border-[var(--line)]
+                  bg-white/[.92]
+                  text-[11px] sm:text-xs
+                  text-[var(--muted)]
+                  font-black
+                  whitespace-nowrap
+                  shrink-0
+                  "
+              >
+                난이도 {result.recipe.difficulty || '보통'}
+              </span>
 
-              <div className="flex gap-[10px] items-center flex-wrap justify-end">
-                <span className="px-[10px] py-[6px] rounded-full border border-[var(--line)] bg-white/[.92] text-[var(--muted)] text-xs font-black whitespace-nowrap">
-                  난이도: {result.recipe.difficulty || '보통'}
-                </span>
-                <button
-                  onClick={() => navigate('/chat', { state: { recipe: result.recipe } })}
-                  className="gradient-bg shadow-[var(--shadow2)] cursor-pointer px-4 py-[10px] rounded-full font-black text-[13px] flex items-center gap-2 transition-all text-[rgba(23,34,51,.90)] select-none hover:translate-y-[-1px] hover:brightness-[1.05] hover:shadow-[var(--shadow)]"
-                >
-                  💬 요리 시작하기
-                </button>
-                <button
-                  onClick={toggleSave}
-                  className={`border border-[var(--line)] ${isSaved ? 'gradient-bg border-[rgba(23,34,51,.08)]' : 'bg-white/[.92]'} shadow-[var(--shadow2)] cursor-pointer px-3 py-[10px] rounded-full font-black text-[13px] flex items-center gap-2 transition-all text-[rgba(23,34,51,.90)] select-none hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]`}
-                >
-                  <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none">
-                    <path d="M6.5 4.5h11v16l-5.5-3-5.5 3v-16Z" stroke="rgba(23,34,51,.78)" strokeWidth="1.7" strokeLinejoin="round" />
-                  </svg>
-                  <span>{isSaved ? '저장됨' : '저장'}</span>
-                </button>
-              </div>
+              {/* 요리 시작하기: 모바일에서 텍스트 축약 */}
+              <button
+                onClick={() => navigate('/chat', { state: { recipe: result.recipe } })}
+                className="
+                gradient-bg shadow-[var(--shadow2)]
+                cursor-pointer
+                px-3 py-[9px] sm:px-4 sm:py-[10px]
+                rounded-full
+                font-black
+                text-[12px] sm:text-[13px]
+                flex items-center gap-2
+                transition-all text-[rgba(23,34,51,.90)]
+                select-none
+                hover:translate-y-[-1px] hover:brightness-[1.05] hover:shadow-[var(--shadow)]
+                whitespace-nowrap
+                shrink-0
+              "
+              >
+                💬 <span className="sm:inline">요리 시작하기</span>
+              </button>
+
+              {/* 저장: 모바일에서 텍스트 축약 */}
+              <button
+                onClick={toggleSave}
+                className={`
+                border border-[var(--line)]
+                ${isSaved ? 'gradient-bg border-[rgba(23,34,51,.08)]' : 'bg-white/[.92]'}
+                shadow-[var(--shadow2)]
+                cursor-pointer
+                px-3 py-[9px] sm:px-3 sm:py-[10px]
+                rounded-full
+                font-black
+                text-[12px] sm:text-[13px]
+                flex items-center gap-2
+                transition-all text-[rgba(23,34,51,.90)]
+                select-none
+                hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]
+                whitespace-nowrap
+                shrink-0
+              `}
+              >
+                <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none">
+                  <path d="M6.5 4.5h11v16l-5.5-3-5.5 3v-16Z" stroke="rgba(23,34,51,.78)" strokeWidth="1.7" strokeLinejoin="round" />
+                </svg>
+                <span className="sm:inline">{isSaved ? '저장됨' : '저장'}</span>
+              </button>
             </div>
+
 
             {/* Recipe Card */}
             <div className="bg-[var(--card)] border border-[var(--line)] rounded-[var(--radius)] shadow-[var(--shadow)] overflow-hidden">
-              <div className="p-[16px_18px] flex items-center justify-between border-b border-[rgba(23,34,51,.08)] gradient-bg-soft">
+              <div className="p-[14px_16px] sm:p-[16px_18px] flex items-center justify-between border-b border-[rgba(23,34,51,.08)] gradient-bg-soft">
                 <h3 className="m-0 text-sm tracking-[.1px] text-[rgba(23,34,51,.92)] flex items-center gap-[10px] font-black">
                   📋 레시피 결과
                 </h3>
@@ -456,8 +575,9 @@ function App() {
                   요약
                 </span>
               </div>
-              <div className="p-[18px]">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-[14px]">
+
+              <div className="p-4 sm:p-[18px]">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-[14px]">
                   {/* Ingredients */}
                   <div>
                     <h5 className="m-0 mb-[10px] text-[14.5px] font-black tracking-[-0.1px]">🧺 재료</h5>
@@ -480,8 +600,8 @@ function App() {
                           <div className="min-w-7 h-7 rounded-[10px] grid place-items-center text-xs font-black text-[rgba(23,34,51,.92)] gradient-bg border border-[rgba(23,34,51,.08)]">
                             {step.step_number}
                           </div>
-                          <div>
-                            <p className="m-0 text-[13.5px] leading-[1.35] font-semibold">{step.instruction}</p>
+                          <div className="min-w-0">
+                            <p className="m-0 text-[13.5px] leading-[1.35] font-semibold break-words">{step.instruction}</p>
                             {step.tips && <p className="m-0 mt-1 text-xs text-[var(--muted)]">💡 {step.tips}</p>}
                             {step.timestamp !== undefined && (
                               <div className="text-xs text-[rgba(95,109,124,.98)] mt-1 font-extrabold">
@@ -511,74 +631,81 @@ function App() {
 
             {/* Video + Timeline Card */}
             <div className="bg-[var(--card)] border border-[var(--line)] rounded-[var(--radius)] shadow-[var(--shadow)] overflow-hidden">
-              <div className="p-[16px_18px] flex items-center justify-between border-b border-[rgba(23,34,51,.08)] gradient-bg-soft">
+              <div className="p-[14px_16px] sm:p-[16px_18px] flex items-center justify-between border-b border-[rgba(23,34,51,.08)] gradient-bg-soft">
                 <h3 className="m-0 text-sm tracking-[.1px] text-[rgba(23,34,51,.92)] flex items-center gap-[10px] font-black">
-                  🎬 본 숏츠 & 타임라인 컷
+                  🎬 본 영상 & 타임라인 컷
                 </h3>
                 <span className="text-xs text-[rgba(23,34,51,.72)] border border-[var(--line)] px-[10px] py-[5px] rounded-full bg-white/[.88] font-black whitespace-nowrap">
                   반복: {loopEnabled ? 'ON' : 'OFF'}
                 </span>
               </div>
-              <div className="p-[18px]">
-                <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_.9fr] gap-3 items-start">
-                  {/* Video */}
-                  <div className="border border-[var(--line)] rounded-2xl overflow-hidden bg-white shadow-[var(--shadow2)]">
-                    <div className="p-[10px_12px] flex items-center justify-between gap-[10px] border-b border-[rgba(23,34,51,.08)] gradient-bg-soft">
-                      <p className="text-[13px] font-black m-0">본 숏츠</p>
-                      <div className="flex items-center gap-[10px] flex-wrap text-[rgba(23,34,51,.78)] text-xs font-black">
-                        <button
-                          onClick={toggleLoop}
-                          className={`flex items-center gap-2 px-[10px] py-[6px] rounded-full border border-[var(--line)] bg-white/[.92] cursor-pointer select-none ${loopEnabled ? 'bg-gradient-to-br from-[var(--g-200)] to-[var(--o-200)]' : ''}`}
-                        >
-                          <span className={`w-[10px] h-[10px] rounded-full border border-[rgba(23,34,51,.12)] transition-all ${loopEnabled ? 'gradient-bg' : 'bg-[rgba(95,109,124,.35)]'}`} />
-                          구간 반복
-                        </button>
-                      </div>
-                    </div>
-                    {videoId ? (
-                      // <iframe
-                      //   className="w-full aspect-[9/16]"
-                      //   src={`https://www.youtube.com/embed/${videoId}?playsinline=1`}
-                      //   title="YouTube video"
-                      //   frameBorder="0"
-                      //   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                      //   allowFullScreen
-                      // />
-                      <YouTube
-                        videoId={videoId}
-                        onReady={onPlayerReady}
-                        opts={{
-                          width: "100%",
-                          height: "100%",
-                          playerVars: {
-                            playsinline: 1,
-                            rel: 0,
-                            modestbranding: 1,
-                          },
-                        }}
-                        className="w-full aspect-[9/16]"
-                      />
-                    ) : (
-                      <div className="w-full aspect-[9/16] bg-black flex items-center justify-center text-white/50">
-                        영상 없음
-                      </div>
-                    )}
-                  </div>
 
+              <div className="p-4 sm:p-[18px]">
+                {/* iPad(820)에서도 2열 되도록 md부터 2열 */}
+                <div className="grid grid-cols-1 md:grid-cols-[1.1fr_.9fr] gap-3 items-start">
+                  {/* Video */}
+                  <div
+                    ref={videoCardRef}
+                    className="border border-[var(--line)] rounded-2xl overflow-hidden bg-white shadow-[var(--shadow2)] scroll-mt-[92px] sm:scroll-mt-[110px]"
+                  >
+                    <div className="border border-[var(--line)] rounded-2xl overflow-hidden bg-white shadow-[var(--shadow2)]">
+                      <div className="p-[10px_12px] flex items-center justify-between gap-[10px] border-b border-[rgba(23,34,51,.08)] gradient-bg-soft">
+                        <p className="text-[13px] font-black m-0">본 영상</p>
+                        <div className="flex items-center gap-[10px] flex-wrap text-[rgba(23,34,51,.78)] text-xs font-black">
+                          <button
+                            onClick={toggleLoop}
+                            className={`
+                            flex items-center gap-2 px-[10px] py-[6px]
+                            rounded-full border border-[var(--line)]
+                            bg-white/[.92] cursor-pointer select-none
+                            ${loopEnabled ? 'bg-gradient-to-br from-[var(--g-200)] to-[var(--o-200)]' : ''}
+                          `}
+                          >
+                            <span className={`w-[10px] h-[10px] rounded-full border border-[rgba(23,34,51,.12)] transition-all ${loopEnabled ? 'gradient-bg' : 'bg-[rgba(95,109,124,.35)]'}`} />
+                            구간 반복
+                          </button>
+                        </div>
+                      </div>
+
+                      {videoId ? (
+                        <YouTube
+                          videoId={videoId}
+                          onReady={onPlayerReady}
+                          opts={{
+                            width: "100%",
+                            height: "100%",
+                            playerVars: { playsinline: 1, rel: 0, modestbranding: 1 },
+                          }}
+                          className="w-full aspect-[9/16]"
+                        />
+                      ) : (
+                        <div className="w-full aspect-[9/16] bg-black flex items-center justify-center text-white/50">
+                          영상 없음
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   {/* Timeline */}
                   <div className="flex flex-col gap-[10px]">
                     {result.recipe.steps?.map((step, idx) => (
                       <div
                         key={idx}
                         onClick={() => playSegment(step)}
-                        className="flex gap-[10px] p-[10px] rounded-2xl border border-[var(--line)] bg-white/[.96] transition-all cursor-pointer shadow-[var(--shadow2)] hover:translate-y-[-1px] hover:shadow-[var(--shadow)] hover:bg-white/[.99]"
+                        className="
+                          flex gap-[10px]
+                          p-[10px]
+                          rounded-2xl border border-[var(--line)]
+                          bg-white/[.96]
+                          transition-all cursor-pointer
+                          shadow-[var(--shadow2)]
+                          hover:translate-y-[-1px] hover:shadow-[var(--shadow)] hover:bg-white/[.99]
+                        "
                       >
-                        <div className="w-[92px] h-16 rounded-[14px] border border-[var(--line)] relative flex-shrink-0 gradient-bg overflow-hidden">
+                        {/* 모바일(430)에서 터치 편하게 약간 키움 */}
+                        <div className="w-[110px] sm:w-[92px] h-[70px] sm:h-16 rounded-[14px] border border-[var(--line)] relative flex-shrink-0 gradient-bg overflow-hidden">
                           {(() => {
                             const frame = frameMap.get(step.step_number);
-                            if (!frame || !jobId) {
-                              return <div className='w-full h-full gradient-bg' />
-                            }
+                            if (!frame || !jobId) return <div className="w-full h-full gradient-bg" />;
                             return (
                               <img
                                 src={getFrameUrl(jobId, frame.frame_filename)}
@@ -592,12 +719,12 @@ function App() {
                             {step.timestamp !== undefined ? formatTime(step.timestamp) : `#${step.step_number}`}
                           </div>
                         </div>
-                        <div className="flex-1 flex flex-col gap-1 pt-[1px]">
+
+                        <div className="flex-1 min-w-0 flex flex-col gap-1 pt-[1px]">
                           <p className="text-[12.8px] font-black m-0">{step.step_number}단계</p>
-                          <p className="m-0 text-xs text-[rgba(95,109,124,.98)] leading-[1.35] font-semibold line-clamp-2">
+                          <p className="m-0 text-xs text-[rgba(95,109,124,.98)] leading-[1.35] font-semibold line-clamp-2 break-words">
                             {step.instruction}
                           </p>
-
                         </div>
                       </div>
                     ))}
@@ -611,7 +738,7 @@ function App() {
 
       {/* Toast */}
       {toast && (
-        <div className="fixed left-1/2 bottom-[26px] -translate-x-1/2 bg-[rgba(23,34,51,.90)] text-white/[.95] px-3 py-[10px] rounded-[14px] shadow-[0_18px_40px_rgba(17,24,39,.16)] text-[13px] max-w-[min(560px,calc(100%-24px))] text-center font-extrabold toast-animate">
+        <div className="fixed left-1/2 bottom-[18px] sm:bottom-[26px] -translate-x-1/2 bg-[rgba(23,34,51,.90)] text-white/[.95] px-3 py-[10px] rounded-[14px] shadow-[0_18px_40px_rgba(17,24,39,.16)] text-[13px] max-w-[min(560px,calc(100%-24px))] text-center font-extrabold toast-animate">
           {toast}
         </div>
       )}
