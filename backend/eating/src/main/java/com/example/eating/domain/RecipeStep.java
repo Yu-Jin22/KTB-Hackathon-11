@@ -29,22 +29,19 @@ public class RecipeStep {
     @Column(columnDefinition = "TEXT")
     private String tips;
 
-    private String imageUrl;
-
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "recipe_id", nullable = false)
     private Recipe recipe;
 
     @Builder
-    public RecipeStep(int stepNumber, String instruction, double timestamp, String duration, String details,
-            String tips, String imageUrl, Recipe recipe) {
+
+    public RecipeStep(int stepNumber, String instruction, double timestamp, String duration, String details, String tips, Recipe recipe) {
         this.stepNumber = stepNumber;
         this.instruction = instruction;
         this.timestamp = timestamp;
         this.duration = duration;
         this.details = details;
         this.tips = tips;
-        this.imageUrl = imageUrl;
         this.recipe = recipe;
     }
 }

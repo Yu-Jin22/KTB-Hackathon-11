@@ -1,9 +1,9 @@
 package com.example.eating.domain;
 
 import jakarta.persistence.*;
-import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -11,6 +11,7 @@ import java.util.List;
 
 @Entity
 @Getter
+@Setter
 @NoArgsConstructor
 public class Recipe {
 
@@ -18,14 +19,13 @@ public class Recipe {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** 레시피 소유자 */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
     private String title;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(length = 1000)
     private String description;
 
     private String servings;
@@ -33,35 +33,42 @@ public class Recipe {
     private String difficulty;
 
     @OneToMany(mappedBy = "recipe", cascade = CascadeType.ALL, orphanRemoval = true)
-    @OrderBy("stepNumber ASC")
-    private List<RecipeStep> steps = new ArrayList<>();
-
-    @OneToMany(mappedBy = "recipe", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<Ingredient> ingredients = new ArrayList<>();
 
-    @ElementCollection
-    @CollectionTable(
-            name = "recipe_tips",
-            joinColumns = @JoinColumn(name = "recipe_id")
+    @OneToMany(mappedBy = "recipe", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<RecipeStep> steps = new ArrayList<>();
+
+    @OneToMany(
+            mappedBy = "recipe",
+            cascade = CascadeType.ALL,
+            orphanRemoval = true
     )
-    @Column(name = "tip")
-    private List<String> tips = new ArrayList<>();
+    private List<RecipeTip> tips = new ArrayList<>();
 
-    @Column(name = "created_at", nullable = false)
-    private LocalDateTime createdAt;
+    @OneToOne(mappedBy = "recipe", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private RecipeVideo recipeVideo;
 
+    public void addTip(String content) {
+        tips.add(new RecipeTip(this, content));
+    }
+    private LocalDateTime createdAt = LocalDateTime.now();
 
-    @Builder
-    public Recipe(User user, String title, String description, String servings, String totalTime, String difficulty, List<RecipeStep> steps, List<Ingredient> ingredients, List<String> tips, LocalDateTime createdAt) {
+    public Recipe(User user) {
         this.user = user;
-        this.title = title;
-        this.description = description;
-        this.servings = servings;
-        this.totalTime = totalTime;
-        this.difficulty = difficulty;
-        this.steps = steps;
-        this.ingredients = ingredients;
-        this.tips = tips;
-        this.createdAt = createdAt;
+    }
+
+    public void addIngredient(Ingredient ingredient) {
+        ingredients.add(ingredient);
+    }
+
+    public void addStep(RecipeStep step) {
+        steps.add(step);
+    }
+
+    public void setRecipeVideo(RecipeVideo recipeVideo) {
+        this.recipeVideo = recipeVideo;
+        if (recipeVideo != null) {
+            recipeVideo.setRecipe(this);
+        }
     }
 }
