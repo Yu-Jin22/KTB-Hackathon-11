@@ -228,8 +228,15 @@ function App() {
     }
   };
 
+  const isAuthed = () => !!localStorage.getItem("access_token");
+
   // 저장 토글
   const toggleSave = () => {
+    if (!isAuthed()) {
+      showToast("저장은 로그인 후 사용할 수 있어요 🙂");
+      navigate("/login", { state: { from: "/", reason: "save" } });
+      return;
+    }
     setIsSaved(!isSaved);
     showToast(isSaved ? '저장을 해제했어.' : '레시피를 저장했어!');
   };
@@ -277,6 +284,9 @@ function App() {
     playerRef.current = event.target;
   };
 
+  const authed = !!localStorage.getItem("access_token");
+
+
   return (
     <div className="min-h-screen">
       {/* Topbar */}
@@ -292,6 +302,21 @@ function App() {
         </div>
 
         <div className="flex items-center gap-[10px]">
+          {!authed ? (
+            <button
+              onClick={() => navigate("/login", { state: { from: "/" } })}
+              className="pill px-3 py-[10px] rounded-full border border-[var(--line)] bg-white/90 text-[rgba(23,34,51,.86)] text-[13px] flex gap-2 items-center cursor-pointer transition-all shadow-[var(--shadow2)] font-black hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]"
+            >
+              🔐 로그인
+            </button>
+          ) : (
+            <button
+              onClick={() => { localStorage.removeItem("access_token"); showToast("로그아웃했어."); }}
+              className="pill px-3 py-[10px] rounded-full border border-[var(--line)] bg-white/90 text-[rgba(23,34,51,.86)] text-[13px] flex gap-2 items-center cursor-pointer transition-all shadow-[var(--shadow2)] font-black hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]"
+            >
+              🚪 로그아웃
+            </button>
+          )}
           <button
             onClick={toggleSave}
             className="pill px-3 py-[10px] rounded-full border border-[var(--line)] bg-white/90 text-[rgba(23,34,51,.86)] text-[13px] flex gap-2 items-center cursor-pointer transition-all shadow-[var(--shadow2)] font-black hover:translate-y-[-1px] hover:bg-white/[.98] hover:shadow-[var(--shadow)]"
