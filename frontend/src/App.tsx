@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { analyzeVideo, getJobStatus, getResult, AnalysisResult, getFrameUrl } from './api/fastApi';
 import YouTube, { YouTubeProps } from 'react-youtube';
+import { subscribe } from './api';
 
 const ANALYSIS_CACHE_KEY = "analysis_cache_v1";
 
@@ -28,10 +29,10 @@ function App() {
   const [isSaved, setIsSaved] = useState(false);
   const [loopEnabled, setLoopEnabled] = useState(false);
   const [activeSegment, setActiveSegment] = useState<{ start: number; end: number } | null>(null);
-  const pollTimerRef = useRef<number | null>(null);
 
   const loopTimerRef = useRef<number | null>(null);
   const playerRef = useRef<any>(null);
+  const sseStopRef = useRef<null | (() => void)>(null);
 
   // Toast 표시
   const showToast = (msg: string) => {
@@ -87,12 +88,6 @@ function App() {
   }, [loopEnabled, activeSegment]);
 
   useEffect(() => {
-    return () => {
-      if (pollTimerRef.current) window.clearTimeout(pollTimerRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
     try {
       const raw = sessionStorage.getItem(ANALYSIS_CACHE_KEY);
       if (!raw) return;
@@ -111,6 +106,13 @@ function App() {
     }
   }, []);
 
+  useEffect(() => {
+    return () => {
+      sseStopRef.current?.();
+      sseStopRef.current = null;
+    }
+  }, [])
+
   const normalizeProgress = (p: unknown) => {
     const n = typeof p === "number" ? p : Number(p);
     if (!Number.isFinite(n)) return 0;
@@ -119,61 +121,13 @@ function App() {
     return Math.max(0, Math.min(100, Math.round(pct)));
   };
 
-
-  // 상태 폴링
-  const pollStatus = useCallback(async (currentJobId: string) => {
-    try {
-      const status = await getJobStatus(currentJobId);
-      setProgress(normalizeProgress(status.progress));
-      setMessage(status.message);
-
-      if (status.status === "completed") {
-        const analysisResult = await getResult(currentJobId);
-        setResult(analysisResult);
-        setIsLoading(false);
-
-        const resolvedVideoId =
-          status.video_id ?? analysisResult.video_info?.video_id ?? extractVideoId(url);
-        // 세션 스토리지에 캐싱
-        const payload: CachedAnalysis = {
-          url,
-          videoId: resolvedVideoId,
-          jobId: currentJobId,
-          result: analysisResult,
-          savedAt: Date.now(),
-        };
-        sessionStorage.setItem(ANALYSIS_CACHE_KEY, JSON.stringify(payload));
-
-        showToast("레시피 추출 완료!");
-        return;
-      }
-
-      if (status.status === "failed") {
-        setError(status.message);
-        setIsLoading(false);
-        showToast("분석 중 오류가 발생했어요.");
-        return;
-      }
-
-      // 다음 폴링 예약(기존 타이머 제거)
-      if (pollTimerRef.current) window.clearTimeout(pollTimerRef.current);
-      pollTimerRef.current = window.setTimeout(() => {
-        pollStatus(currentJobId);
-      }, 1000);
-    } catch (err) {
-      setError("상태 확인 중 오류가 발생했습니다.");
-      setIsLoading(false);
-    }
-  }, []);
-
-
   // 분석 시작
   const handleAnalyze = async () => {
     sessionStorage.removeItem(ANALYSIS_CACHE_KEY);
-    if (pollTimerRef.current) {
-      window.clearTimeout(pollTimerRef.current);
-      pollTimerRef.current = null;
-    }
+
+    sseStopRef.current?.();
+    sseStopRef.current = null;
+
     if (!url.trim()) {
       showToast('링크를 먼저 넣어줘!');
       return;
@@ -198,7 +152,42 @@ function App() {
     try {
       const response = await analyzeVideo(url);
       setJobId(response.jobId);
-      pollStatus(response.jobId);
+
+      sseStopRef.current = subscribe(response.jobId, {
+        onProgress: (payload) => {
+          // payload: { jobId, status, progress, message}
+          const p = typeof payload.progress === "number" ? payload.progress : 0;
+          setProgress(Math.max(0, Math.min(100, Math.round(p))));
+          setMessage(payload.message ?? "처리 중...");
+        },
+        onCompleted: async () => {
+          // 3) 완료되면 최종 결과 받아오기
+          const analysisResult = await getResult(response.jobId);
+          setResult(analysisResult);
+          setIsLoading(false);
+
+          // 캐시 저장
+          const payload = {
+            url,
+            videoId,
+            jobId: response.jobId,
+            result: analysisResult,
+            savedAt: Date.now(),
+          }
+          sessionStorage.setItem(ANALYSIS_CACHE_KEY, JSON.stringify(payload));
+
+          showToast('레시피 추출 완료!');
+        },
+        onFailed: (payload) => {
+          setError(payload?.message ?? "분석 실패");
+          setIsLoading(false);
+          showToast("분석 중 오류가 발생했어요.");
+        },
+        onError: () => {
+          // SSE 연결 문제(프록시/서버 다운 등)
+          showToast("SSE 연결 오류");
+        }
+      });
     } catch (err) {
       setError('분석 시작 중 오류가 발생했습니다.');
       setIsLoading(false);

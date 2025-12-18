@@ -171,3 +171,51 @@ export const fetchRecipes = async () => {
     const { data } = await api.get("/recipes");
     return data;
 };
+
+// SSE
+export type ProgressPayload = {
+    jobId?: string;
+    status?: "pending" | "processing" | "completed" | "failed" | string;
+    progress?: number;
+    message?: string;
+    videoId?: string;
+}
+
+export function subscribe(
+    jobId: string,
+    handlers: {
+        onConnected?: (data: any) => void;
+        onProgress?: (data: ProgressPayload) => void;
+        onCompleted?: (data?: any) => void;
+        onFailed?: (data?: any) => void;
+        onError?: (e: any) => void;
+    }
+) {
+    const es = new EventSource(`http://localhost:8080/api/sse/jobs/${jobId}`);
+    const safeJson = (e: MessageEvent) => {
+        try {
+            return JSON.parse(e.data);
+        } catch { return e.data; }
+    }
+
+    es.addEventListener("connected", (e) => handlers.onConnected?.(safeJson(e)));
+
+    es.addEventListener("progress", (e) => handlers.onProgress?.(safeJson(e)));
+
+    es.addEventListener("completed", (e) => {
+        handlers.onCompleted?.(safeJson(e as MessageEvent));
+        es.close();
+    });
+
+    es.addEventListener("failed", (e) => {
+        handlers.onFailed?.(safeJson(e as MessageEvent));
+        es.close();
+    });
+
+    es.addEventListener("error", (e) => handlers.onError?.(e));
+    es.onerror = (e) => {
+        es.close();
+    };
+
+    return () => es.close();
+}
