@@ -92,8 +92,7 @@ jobs:
         run: |
           cd frontend
           npm install
-          npm run typecheck || true
-          npm run build
+          npm run build:ci
 
       - uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -131,8 +130,8 @@ jobs:
       - name: Build & Push Backend Image
         uses: docker/build-push-action@v6
         with:
-          context: ./backend
-          file: ./backend/Dockerfile
+          context: ./backend/eating
+          file: ./backend/eating/Dockerfile
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/hkt-backend:${{ github.sha }}
