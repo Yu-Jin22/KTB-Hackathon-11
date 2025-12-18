@@ -1,339 +1,185 @@
-"""
-레시피 파싱 서비스 모듈.
-
-GPT-4o를 사용하여 음성 텍스트를 구조화된 레시피로 변환합니다.
-"""
+import os
 import json
-import logging
-import re
-from typing import Any, Dict, List, Optional
+from openai import OpenAI
+from dotenv import load_dotenv
 
-from openai import APIConnectionError, APIError, OpenAI, RateLimitError
+load_dotenv()
 
-from app.config import (
-    MIN_TRANSCRIPT_LENGTH,
-    OPENAI_API_KEY,
-    OPENAI_MODEL_GPT4O,
-)
-from app.exceptions import RecipeParseError
-from app.prompts import RECIPE_PARSE_PROMPT
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# =============================================================================
-# 로깅 및 클라이언트 설정
-# =============================================================================
-logger = logging.getLogger(__name__)
-client = OpenAI(api_key=OPENAI_API_KEY)
+RECIPE_PARSE_PROMPT = """당신은 자취생을 위한 요리 레시피 전문가입니다.
+YouTube 쇼츠 요리 영상의 음성 텍스트를 분석하여, 초보자도 쉽게 따라할 수 있도록 **매우 상세한** 레시피로 정리해주세요.
 
-# =============================================================================
-# 상수
-# =============================================================================
-MAX_TRANSCRIPT_LENGTH = 4000  # 토큰 제한 (한글 1자 ≈ 2토큰)
-API_TIMEOUT = 60  # 초
+## 중요: 상세한 설명 원칙
+- 각 조리 단계는 **구체적인 행동**을 포함해야 합니다
+- "썰어주세요" → "0.5cm 두께로 얇게 썰어주세요" 처럼 구체적으로
+- 불 조절, 시간, 색깔 변화 등 **감각적 지표**를 포함하세요
+- 자취생이 처음 요리해도 따라할 수 있게 친절하게 작성하세요
+
+- steps의 timestamp는 아래 segments의 시간 범위(start, end)를 근거로 정한다.
+- 각 step은 반드시 source_segment_ids를 포함하고,
+- timestamp는 start = min(선택된 segment.start)로 계산한다.
+- 모델은 start/end 숫자를 새로 만들지 말고 segments에서만 가져온다(0.1초 반올림만 허용).
 
 
-# =============================================================================
-# 헬퍼 함수
-# =============================================================================
-def _clean_json_response(text: str) -> str:
-    """
-    GPT 응답에서 JSON 부분만 추출합니다.
 
-    Args:
-        text: GPT 응답 텍스트
-
-    Returns:
-        정제된 JSON 문자열
-    """
-    pattern = r"```(?:json)?\s*([\s\S]*?)```"
-    match = re.search(pattern, text)
-    if match:
-        return match.group(1).strip()
-    return text.strip()
-
-
-def _validate_recipe_data(recipe_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    레시피 데이터 유효성 검사 및 기본값 설정.
-
-    Args:
-        recipe_data: 원본 레시피 데이터
-
-    Returns:
-        유효성 검사된 레시피 데이터
-    """
-    defaults = {
-        "title": "레시피",
-        "description": "",
-        "servings": "1인분",
-        "total_time": "",
-        "difficulty": "보통",
-        "ingredients": [],
-        "steps": [],
-        "tips": []
-    }
-
-    for key, default_value in defaults.items():
-        if key not in recipe_data or recipe_data[key] is None:
-            recipe_data[key] = default_value
-
-    recipe_data["steps"] = _validate_steps(recipe_data.get("steps", []))
-    recipe_data["ingredients"] = _validate_ingredients(
-        recipe_data.get("ingredients", [])
-    )
-
-    return recipe_data
-
-
-def _validate_steps(steps: List[Any]) -> List[Dict[str, Any]]:
-    """
-    조리 단계 리스트 유효성 검사.
-
-    Args:
-        steps: 원본 조리 단계 리스트
-
-    Returns:
-        유효성 검사된 조리 단계 리스트
-    """
-    validated_steps = []
-
-    for i, step in enumerate(steps):
-        if not isinstance(step, dict):
-            continue
-
-        validated_step = {
-            "step_number": step.get("step_number", i + 1),
-            "instruction": step.get("instruction", ""),
-            "timestamp": max(0, float(step.get("timestamp", 0))),
-            "duration": step.get("duration", ""),
-            "details": step.get("details", ""),
-            "tips": step.get("tips", "")
+## 출력 형식 (반드시 JSON으로)
+{
+    "title": "요리 이름",
+    "description": "요리에 대한 설명과 특징 (맛, 난이도, 추천 상황 등 2-3문장)",
+    "servings": "인분 수",
+    "total_time": "총 조리 시간",
+    "difficulty": "난이도 (쉬움/보통/어려움)",
+    "ingredients": [
+        {
+            "name": "재료명",
+            "amount": "양",
+            "unit": "단위",
+            "note": "손질법이나 대체재료 (예: 없으면 OO로 대체 가능)"
         }
-        validated_steps.append(validated_step)
+    ],
+    "steps": [
+        {
+            "step_number": 1,
+            "instruction": "상세한 조리 단계 설명 (구체적인 방법, 시간, 불 세기 등 포함)",
+            "timestamp": 0.0, 
+            "duration": "이 단계 소요 시간",
+            "details": "추가 설명 (왜 이렇게 하는지, 어떤 상태가 되어야 하는지)",
+            "tips": "초보자를 위한 팁이나 주의사항"
+        }
+    ],
+    "tips": ["전체적인 요리 팁들 - 보관법, 응용법 등"]
+}
 
-    return validated_steps
+## 상세 작성 예시
+
+나쁜 예:
+- "양파를 볶아주세요"
+
+좋은 예:
+- "중불에서 양파가 투명해질 때까지 약 2-3분간 볶아주세요. 양파가 갈색으로 변하기 시작하면 불을 줄이세요."
+
+## 주의사항
+1. 재료의 양과 단위를 명확히 분리 (예: "2스푼" → amount: "2", unit: "스푼")
+2. 각 조리 단계에 해당하는 타임스탬프를 정확히 매핑
+3. **조리 단계는 가능한 세분화**하여 작성 (영상에서 빠르게 넘어가도 상세히)
+4. 불 세기(약불/중불/강불), 시간, 완료 상태를 반드시 포함
+5. 영상에서 직접 언급하지 않았더라도, 요리 상식으로 필요한 정보는 추가
+6. 한국어로 친근하게 작성
+7. 반드시 유효한 JSON 형식으로 출력
+"""
 
 
-def _validate_ingredients(ingredients: List[Any]) -> List[Dict[str, str]]:
+async def parse_recipe(transcript_data: dict) -> dict:
     """
-    재료 리스트 유효성 검사.
+    GPT-4o를 사용하여 음성 텍스트를 구조화된 레시피로 변환합니다.
 
     Args:
-        ingredients: 원본 재료 리스트
-
-    Returns:
-        유효성 검사된 재료 리스트
-    """
-    validated_ingredients = []
-
-    for ing in ingredients:
-        if not isinstance(ing, dict):
-            continue
-
-        validated_ing = {
-            "name": str(ing.get("name", "")),
-            "amount": str(ing.get("amount", "")),
-            "unit": str(ing.get("unit", "")),
-            "note": str(ing.get("note", ""))
+        transcript_data: {
+            'full_text': str,
+            'segments': [{'start': float, 'end': float, 'text': str}]
         }
 
-        if validated_ing["name"]:
-            validated_ingredients.append(validated_ing)
-
-    return validated_ingredients
-
-
-def _build_user_message(
-    full_text: str,
-    segments: List[Dict[str, Any]]
-) -> str:
-    """
-    GPT에 전달할 사용자 메시지를 구성합니다.
-
-    Args:
-        full_text: 전체 전사 텍스트
-        segments: 타임스탬프가 포함된 세그먼트 리스트
-
     Returns:
-        구성된 사용자 메시지
+        dict: 구조화된 레시피 데이터
     """
+    # 세그먼트 정보를 포함한 텍스트 구성
     segments_text = ""
-    for seg in segments:
-        start = seg.get("start", 0)
-        end = seg.get("end", 0)
-        text = seg.get("text", "")
+    for seg in transcript_data.get('segments', []):
+        start = seg['start']
+        end = seg['end']
+        text = seg['text']
         segments_text += f"[{start:.1f}s - {end:.1f}s]: {text}\n"
 
-    return f"""다음은 요리 영상의 음성 텍스트입니다:
+    user_message = f"""다음은 요리 영상의 음성 텍스트입니다:
 
 ## 전체 텍스트
-{full_text}
+{transcript_data.get('full_text', '')}
 
 ## 타임스탬프별 세그먼트
 {segments_text}
 
 이 내용을 분석하여 구조화된 레시피 JSON을 생성해주세요."""
 
-
-def _create_empty_recipe(
-    title: str = "레시피",
-    description: str = "",
-    raw_text: str = ""
-) -> Dict[str, Any]:
-    """
-    빈 레시피 구조를 생성합니다.
-
-    Args:
-        title: 레시피 제목
-        description: 설명
-        raw_text: 원본 텍스트
-
-    Returns:
-        빈 레시피 구조
-    """
-    return _validate_recipe_data({
-        "title": title,
-        "description": description,
-        "ingredients": [],
-        "steps": [],
-        "raw_text": raw_text
-    })
-
-
-# =============================================================================
-# API 호출
-# =============================================================================
-def _call_gpt_api(user_message: str) -> Dict[str, Any]:
-    """
-    GPT API를 호출하여 레시피를 파싱합니다.
-
-    Args:
-        user_message: 사용자 메시지
-
-    Returns:
-        파싱된 레시피 데이터
-
-    Raises:
-        RecipeParseError: API 응답이 유효하지 않은 경우
-        json.JSONDecodeError: JSON 파싱 실패 시
-    """
     response = client.chat.completions.create(
-        model=OPENAI_MODEL_GPT4O,
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": RECIPE_PARSE_PROMPT},
             {"role": "user", "content": user_message}
         ],
-        response_format={"type": "json_object"},
-        timeout=API_TIMEOUT
+        temperature=0.3,
+        response_format={"type": "json_object"}
     )
-
-    if not response.choices:
-        raise RecipeParseError("GPT 응답에 choices가 없습니다")
 
     result_text = response.choices[0].message.content
 
-    if not result_text:
-        raise RecipeParseError("GPT 응답이 비어있습니다")
+    try:
+        recipe_data = json.loads(result_text)
+    except json.JSONDecodeError:
+        # JSON 파싱 실패 시 기본 구조 반환
+        recipe_data = {
+            "title": "레시피",
+            "description": "파싱 중 오류가 발생했습니다.",
+            "ingredients": [],
+            "steps": [],
+            "raw_text": transcript_data.get('full_text', '')
+        }
 
-    cleaned_text = _clean_json_response(result_text)
-    return json.loads(cleaned_text)
+    return recipe_data
 
 
-# =============================================================================
-# 메인 파싱 함수
-# =============================================================================
-async def parse_recipe(
-    transcript_data: Dict[str, Any],
-    max_retries: int = 2
-) -> Dict[str, Any]:
+def get_step_timestamps(recipe_data: dict) -> list:
+    """레시피 단계별 타임스탬프 목록 추출/정규화"""
+    timestamps = []
+    for step in recipe_data.get('steps', []):
+        raw_ts = step.get('timestamp')
+        parsed_ts = parse_timestamp_value(raw_ts)
+        if parsed_ts is None:
+            continue
+        timestamps.append({
+            'step_number': step.get('step_number', 0),
+            'timestamp': parsed_ts,
+            'instruction': step.get('instruction', '')
+        })
+    # 타임스탬프 기준 정렬로 ffmpeg 캡처 순서 고정
+    return sorted(timestamps, key=lambda item: item['timestamp'])
+
+
+def parse_timestamp_value(value) -> float | None:
     """
-    GPT-4o를 사용하여 음성 텍스트를 구조화된 레시피로 변환합니다.
-
-    Args:
-        transcript_data: 전사 데이터
-            - full_text: 전체 텍스트
-            - segments: 세그먼트 리스트
-
-        max_retries: API 호출 실패 시 재시도 횟수
-
-    Returns:
-        구조화된 레시피 데이터
-
-    Raises:
-        RecipeParseError: 파싱 실패 시 (내부적으로 처리됨)
+    다양한 형태의 timestamp 값을 초 단위 float로 정규화한다.
+    허용: float/int, "12.3", "01:23", "00:01:23"
     """
-    full_text = transcript_data.get("full_text", "").strip()
+    if value is None:
+        return None
 
-    # 입력 검증
-    if not full_text or len(full_text) < MIN_TRANSCRIPT_LENGTH:
-        logger.warning(
-            f"전사 텍스트가 너무 짧습니다: {len(full_text)}자 "
-            f"(최소 {MIN_TRANSCRIPT_LENGTH}자)"
-        )
-        return _create_empty_recipe(
-            description="음성 인식 결과가 너무 짧습니다."
-        )
+    # 이미 숫자인 경우
+    if isinstance(value, (int, float)):
+        return float(value) if value >= 0 else None
 
-    # 토큰 제한 체크
-    if len(full_text) > MAX_TRANSCRIPT_LENGTH:
-        logger.warning(
-            f"전사 텍스트가 너무 깁니다: {len(full_text)}자, "
-            f"{MAX_TRANSCRIPT_LENGTH}자로 자름"
-        )
-        full_text = full_text[:MAX_TRANSCRIPT_LENGTH]
-
-    segments = transcript_data.get("segments", [])
-    user_message = _build_user_message(full_text, segments)
-
-    last_error: Optional[Exception] = None
-
-    for attempt in range(max_retries + 1):
+    if isinstance(value, str):
+        text = value.strip().lower()
+        # 숫자 문자열 "12.3" 또는 "12"
         try:
-            logger.info(
-                f"레시피 파싱 시도 {attempt + 1}/{max_retries + 1}, "
-                f"모델: {OPENAI_MODEL_GPT4O}"
-            )
+            num = float(text.replace('s', ''))
+            if num >= 0:
+                return num
+        except ValueError:
+            pass
 
-            recipe_data = _call_gpt_api(user_message)
-            recipe_data = _validate_recipe_data(recipe_data)
+        # MM:SS 또는 HH:MM:SS
+        parts = text.split(':')
+        if 2 <= len(parts) <= 3 and all(p.replace('.', '', 1).isdigit() for p in parts):
+            try:
+                parts = [float(p) for p in parts]
+                if len(parts) == 2:
+                    minutes, seconds = parts
+                    total = minutes * 60 + seconds
+                else:
+                    hours, minutes, seconds = parts
+                    total = hours * 3600 + minutes * 60 + seconds
+                return total if total >= 0 else None
+            except Exception:
+                return None
 
-            logger.info(
-                f"레시피 파싱 성공: {recipe_data.get('title', 'unknown')}"
-            )
-            return recipe_data
-
-        except json.JSONDecodeError as e:
-            last_error = e
-            logger.warning(f"JSON 파싱 실패 (시도 {attempt + 1}): {e}")
-
-        except RateLimitError as e:
-            last_error = e
-            logger.error(f"API 할당량 초과: {e}")
-            break
-
-        except APIConnectionError as e:
-            last_error = e
-            logger.warning(f"API 연결 오류 (시도 {attempt + 1}): {e}")
-
-        except APIError as e:
-            last_error = e
-            logger.error(f"OpenAI API 오류: {e}")
-            break
-
-        except RecipeParseError as e:
-            last_error = e
-            logger.warning(f"레시피 파싱 오류 (시도 {attempt + 1}): {e}")
-
-        except Exception as e:
-            last_error = e
-            logger.error(f"예상치 못한 오류 (시도 {attempt + 1}): {e}")
-
-    # 모든 재시도 실패 시 기본 구조 반환
-    logger.error(f"레시피 파싱 최종 실패: {last_error}")
-
-    error_description = str(last_error)[:100] if last_error else "알 수 없는 오류"
-
-    return _create_empty_recipe(
-        title="레시피 (파싱 실패)",
-        description=f"레시피 분석 중 오류가 발생했습니다: {error_description}",
-        raw_text=full_text
-    )
+    return None
